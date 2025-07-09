@@ -1,0 +1,361 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Dashboard - Zentravision{% endblock %}
+
+{% block breadcrumb %}
+<nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item active">Dashboard</li>
+    </ol>
+</nav>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    .stat-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border-radius: 15px;
+        padding: 1.5rem;
+        margin-bottom: 1rem;
+        transition: transform 0.3s ease;
+    }
+    
+    .stat-card:hover {
+        transform: translateY(-5px);
+    }
+    
+    .stat-card.success {
+        background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+    }
+    
+    .stat-card.warning {
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+    }
+    
+    .stat-card.info {
+        background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+    }
+    
+    .stat-number {
+        font-size: 2.5rem;
+        font-weight: bold;
+        margin-bottom: 0.5rem;
+    }
+    
+    .stat-label {
+        font-size: 0.9rem;
+        opacity: 0.9;
+    }
+    
+    .chart-container {
+        background: white;
+        border-radius: 15px;
+        padding: 1.5rem;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        margin-bottom: 1rem;
+        min-height: 400px;
+    }
+    
+    .chart-container canvas {
+        max-height: 300px !important;
+        width: 100% !important;
+    }
+    
+    .recent-files {
+        background: white;
+        border-radius: 15px;
+        overflow: hidden;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    
+    .file-item {
+        padding: 1rem;
+        border-bottom: 1px solid #f1f3f4;
+        transition: background-color 0.2s ease;
+    }
+    
+    .file-item:hover {
+        background-color: #f8f9fa;
+    }
+    
+    .file-item:last-child {
+        border-bottom: none;
+    }
+    
+    .status-badge {
+        font-size: 0.8rem;
+        padding: 0.25rem 0.5rem;
+        border-radius: 12px;
+        font-weight: 500;
+    }
+    
+    .status-completed {
+        background-color: #d4edda;
+        color: #155724;
+    }
+    
+    .status-processing {
+        background-color: #fff3cd;
+        color: #856404;
+    }
+    
+    .status-error {
+        background-color: #f8d7da;
+        color: #721c24;
+    }
+    
+    .status-pending {
+        background-color: #d1ecf1;
+        color: #0c5460;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+    <!-- Header -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <h1 class="h3 mb-2">
+                <i class="fas fa-tachometer-alt me-2 text-primary"></i>
+                Dashboard
+            </h1>
+            <p class="text-muted">Resumen de actividad de glosas médicas</p>
+        </div>
+    </div>
+
+    <!-- Statistics Cards -->
+    <div class="row mb-4">
+        <div class="col-md-3 col-sm-6">
+            <div class="stat-card">
+                <div class="stat-number">{{ total_glosas|default:0 }}</div>
+                <div class="stat-label">
+                    <i class="fas fa-file-pdf me-1"></i>Total Glosas
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-md-3 col-sm-6">
+            <div class="stat-card success">
+                <div class="stat-number">{{ completed_glosas|default:0 }}</div>
+                <div class="stat-label">
+                    <i class="fas fa-check-circle me-1"></i>Completadas
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-md-3 col-sm-6">
+            <div class="stat-card warning">
+                <div class="stat-number">{{ processing_glosas|default:0 }}</div>
+                <div class="stat-label">
+                    <i class="fas fa-spinner me-1"></i>Procesando
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-md-3 col-sm-6">
+            <div class="stat-card info">
+                <div class="stat-number">{{ success_rate|default:0 }}%</div>
+                <div class="stat-label">
+                    <i class="fas fa-chart-line me-1"></i>Tasa de Éxito
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Charts and Recent Files -->
+    <div class="row">
+        <!-- Status Distribution Chart -->
+        <div class="col-lg-6 mb-4">
+            <div class="chart-container">
+                <h5 class="mb-3">
+                    <i class="fas fa-chart-pie me-2 text-primary"></i>
+                    Distribución por Estado
+                </h5>
+                <canvas id="statusChart" width="400" height="300"></canvas>
+            </div>
+        </div>
+
+        <!-- Recent Files -->
+        <div class="col-lg-6 mb-4">
+            <div class="recent-files">
+                <div class="p-3 border-bottom bg-light">
+                    <h5 class="mb-0">
+                        <i class="fas fa-clock me-2 text-primary"></i>
+                        Glosas Recientes
+                    </h5>
+                </div>
+                
+                {% if recent_glosas %}
+                    {% for glosa in recent_glosas %}
+                    <div class="file-item">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div class="flex-grow-1">
+                                <h6 class="mb-1">
+                                    <a href="{% url 'glosa_detail' glosa.id %}" class="text-decoration-none">
+                                        {{ glosa.original_filename|default:"Sin nombre" }}
+                                    </a>
+                                </h6>
+                                <small class="text-muted">
+                                    <i class="fas fa-calendar me-1"></i>
+                                    {{ glosa.created_at|date:"d/m/Y H:i" }}
+                                </small>
+                            </div>
+                            <div>
+                                {% if glosa.status == 'completed' %}
+                                    <span class="status-badge status-completed">
+                                        <i class="fas fa-check me-1"></i>Completado
+                                    </span>
+                                {% elif glosa.status == 'processing' %}
+                                    <span class="status-badge status-processing">
+                                        <i class="fas fa-spinner me-1"></i>Procesando
+                                    </span>
+                                {% elif glosa.status == 'error' %}
+                                    <span class="status-badge status-error">
+                                        <i class="fas fa-exclamation-triangle me-1"></i>Error
+                                    </span>
+                                {% else %}
+                                    <span class="status-badge status-pending">
+                                        <i class="fas fa-clock me-1"></i>Pendiente
+                                    </span>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="file-item text-center py-4">
+                        <i class="fas fa-inbox fa-2x text-muted mb-2"></i>
+                        <p class="text-muted mb-2">No hay glosas recientes</p>
+                        <a href="{% url 'upload_glosa' %}" class="btn btn-primary btn-sm">
+                            <i class="fas fa-upload me-1"></i>Subir Primera Glosa
+                        </a>
+                    </div>
+                {% endif %}
+                
+                {% if recent_glosas %}
+                <div class="p-3 border-top bg-light text-center">
+                    <a href="{% url 'glosa_list' %}" class="btn btn-outline-primary btn-sm">
+                        <i class="fas fa-list me-1"></i>Ver Todas las Glosas
+                    </a>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="row">
+        <div class="col-12">
+            <div class="chart-container">
+                <h5 class="mb-3">
+                    <i class="fas fa-bolt me-2 text-primary"></i>
+                    Acciones Rápidas
+                </h5>
+                <div class="row">
+                    <div class="col-md-4 mb-2">
+                        <a href="{% url 'upload_glosa' %}" class="btn btn-primary w-100">
+                            <i class="fas fa-upload me-2"></i>Subir Nueva Glosa
+                        </a>
+                    </div>
+                    <div class="col-md-4 mb-2">
+                        <a href="{% url 'glosa_list' %}" class="btn btn-outline-primary w-100">
+                            <i class="fas fa-list me-2"></i>Ver Todas las Glosas
+                        </a>
+                    </div>
+                    <div class="col-md-4 mb-2">
+                        <a href="/admin/" class="btn btn-outline-secondary w-100">
+                            <i class="fas fa-cog me-2"></i>Panel Admin
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Datos del gráfico desde Django
+    const statusData = {{ status_data|safe }};
+    
+    // Obtener el canvas y verificar que existe
+    const canvas = document.getElementById('statusChart');
+    if (!canvas) return;
+    
+    // Destruir gráfico existente si existe
+    if (window.statusChartInstance) {
+        window.statusChartInstance.destroy();
+    }
+    
+    // Configurar gráfico de donut
+    const ctx = canvas.getContext('2d');
+    
+    // Crear nuevo gráfico y guardarlo en window para poder destruirlo después
+    window.statusChartInstance = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels: ['Completadas', 'Procesando', 'Error', 'Pendientes'],
+            datasets: [{
+                data: [
+                    statusData.completed || 0,
+                    statusData.processing || 0,
+                    statusData.error || 0,
+                    statusData.pending || 0
+                ],
+                backgroundColor: [
+                    '#28a745',  // Verde para completadas
+                    '#ffc107',  // Amarillo para procesando
+                    '#dc3545',  // Rojo para error
+                    '#17a2b8'   // Azul para pendientes
+                ],
+                borderWidth: 2,
+                borderColor: '#fff'
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            aspectRatio: 1.5,
+            plugins: {
+                legend: {
+                    position: 'bottom',
+                    labels: {
+                        padding: 15,
+                        usePointStyle: true,
+                        boxWidth: 12
+                    }
+                }
+            },
+            cutout: '60%',
+            animation: {
+                animateRotate: true,
+                animateScale: false,
+                duration: 800
+            }
+        }
+    });
+    
+    // Auto-refresh cada 30 segundos si hay glosas procesando (opcional)
+    // Comentamos esto para evitar recargas automáticas que pueden causar problemas
+    /*
+    if (statusData.processing > 0) {
+        setTimeout(() => {
+            location.reload();
+        }, 30000);
+    }
+    */
+});
+
+// Limpiar gráfico cuando se abandona la página
+window.addEventListener('beforeunload', function() {
+    if (window.statusChartInstance) {
+        window.statusChartInstance.destroy();
+    }
+});
+</script>
+{% endblock %}

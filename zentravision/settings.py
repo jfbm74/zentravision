@@ -23,8 +23,8 @@ THIRD_PARTY_APPS = [
     'rest_framework',
     'crispy_forms',
     'crispy_bootstrap5',
-    'django_celery_beat',
-    'django_celery_results',
+    # 'django_celery_beat',
+    # 'django_celery_results',
     'django_extensions',
 ]
 
@@ -132,3 +132,9 @@ OPENAI_API_KEY = config('OPENAI_API_KEY')
 # File Upload Settings
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024   # 10 MB
+
+
+# URLs de autenticación
+LOGIN_URL = 'login'  # Cambia de '/accounts/login/' a 'login'
+LOGIN_REDIRECT_URL = '/'  # Redirige al dashboard después del login
+LOGOUT_REDIRECT_URL = '/login/'  # Redirige al login después del logout
