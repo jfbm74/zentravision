@@ -1,0 +1,114 @@
+<!-- ==========================================
+     apps/templates/upload.html
+     ========================================== -->
+{% extends 'base.html' %}
+{% load crispy_forms_tags %}
+
+{% block title %}Subir Glosa - Zentravision{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center mt-4">
+    <div class="col-lg-8">
+        <div class="mb-4">
+            <h1><i class="fas fa-upload text-primary"></i> Subir Nueva Glosa</h1>
+            <p class="text-muted">Sube un documento PDF de glosa médica para su procesamiento automático</p>
+        </div>
+
+        <div class="upload-zone mb-4" id="uploadZone">
+            <i class="fas fa-cloud-upload-alt fa-3x text-muted mb-3"></i>
+            <h5 class="text-muted">Arrastra tu archivo aquí o haz clic para seleccionar</h5>
+            <p class="text-muted mb-0">Solo archivos PDF, máximo 10MB</p>
+        </div>
+
+        {% crispy form %}
+
+        <!-- Guía de uso -->
+        <div class="card mt-4">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="fas fa-info-circle"></i> Información del Procesamiento</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-4">
+                        <h6><i class="fas fa-robot text-primary"></i> Estrategias Disponibles</h6>
+                        <ul class="list-unstyled">
+                            <li><strong>Híbrida:</strong> OCR + IA (Recomendada)</li>
+                            <li><strong>Solo IA:</strong> Procesamiento con inteligencia artificial</li>
+                            <li><strong>Solo OCR:</strong> Extracción tradicional de texto</li>
+                        </ul>
+                    </div>
+                    <div class="col-md-4">
+                        <h6><i class="fas fa-search text-success"></i> Campos Extraídos</h6>
+                        <ul class="list-unstyled">
+                            <li>• Información del paciente</li>
+                            <li>• Número de liquidación</li>
+                            <li>• Fechas importantes</li>
+                            <li>• Detalles de procedimientos</li>
+                            <li>• Valores monetarios</li>
+                        </ul>
+                    </div>
+                    <div class="col-md-4">
+                        <h6><i class="fas fa-download text-info"></i> Formatos de Salida</h6>
+                        <ul class="list-unstyled">
+                            <li>• JSON estructurado</li>
+                            <li>• CSV para análisis</li>
+                            <li>• Vista web interactiva</li>
+                            <li>• Logs de procesamiento</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Drag and drop functionality
+    const uploadZone = document.getElementById('uploadZone');
+    const fileInput = document.getElementById('id_original_file');
+
+    uploadZone.addEventListener('click', () => {
+        fileInput.click();
+    });
+
+    uploadZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        uploadZone.style.borderColor = '#007bff';
+        uploadZone.style.backgroundColor = '#f8f9fa';
+    });
+
+    uploadZone.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        uploadZone.style.borderColor = '#dee2e6';
+        uploadZone.style.backgroundColor = '';
+    });
+
+    uploadZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        uploadZone.style.borderColor = '#dee2e6';
+        uploadZone.style.backgroundColor = '';
+        
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            fileInput.files = files;
+            updateFileName(files[0].name);
+        }
+    });
+
+    fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) {
+            updateFileName(e.target.files[0].name);
+        }
+    });
+
+    function updateFileName(fileName) {
+        uploadZone.innerHTML = `
+            <i class="fas fa-file-pdf fa-3x text-success mb-3"></i>
+            <h5 class="text-success">Archivo seleccionado</h5>
+            <p class="text-muted mb-0">${fileName}</p>
+        `;
+    }
+</script>
+{% endblock %}

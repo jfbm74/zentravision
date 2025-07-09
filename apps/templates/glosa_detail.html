@@ -1,0 +1,332 @@
+<!-- ==========================================
+     apps/templates/glosa_detail.html
+     ========================================== -->
+{% extends 'base.html' %}
+
+{% block title %}Glosa {{ glosa.liquidacion_numero }} - Zentravision{% endblock %}
+
+{% block content %}
+<div class="row mt-4">
+    <div class="col-12">
+        <!-- Header -->
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <div>
+                <h1><i class="fas fa-file-medical text-primary"></i> Detalle de Glosa</h1>
+                <p class="text-muted mb-0">{{ glosa.original_filename }}</p>
+            </div>
+            <div>
+                {% if glosa.status == 'completed' %}
+                    <a href="{% url 'download_file' glosa.id 'json' %}" class="btn btn-success me-2">
+                        <i class="fas fa-download"></i> JSON
+                    </a>
+                    <a href="{% url 'download_file' glosa.id 'csv' %}" class="btn btn-success me-2">
+                        <i class="fas fa-download"></i> CSV
+                    </a>
+                {% endif %}
+                {% if glosa.status in 'completed,error' %}
+                    <a href="{% url 'reprocess_glosa' glosa.id %}" class="btn btn-warning" onclick="return confirm('¿Estás seguro de que quieres reprocesar este documento?')">
+                        <i class="fas fa-redo"></i> Reprocesar
+                    </a>
+                {% endif %}
+                <a href="{% url 'glosa_list' %}" class="btn btn-secondary">
+                    <i class="fas fa-arrow-left"></i> Volver
+                </a>
+            </div>
+        </div>
+
+        <!-- Status and Info -->
+        <div class="row mb-4">
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="fas fa-info-circle"></i> Información General</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <dl class="row">
+                                    <dt class="col-sm-5">Estado:</dt>
+                                    <dd class="col-sm-7">
+                                        {% if glosa.status == 'completed' %}
+                                            <span class="badge bg-success">
+                                                <i class="fas fa-check"></i> Completado
+                                            </span>
+                                        {% elif glosa.status == 'processing' %}
+                                            <span class="badge bg-warning">
+                                                <i class="fas fa-cog fa-spin"></i> Procesando
+                                            </span>
+                                        {% elif glosa.status == 'error' %}
+                                            <span class="badge bg-danger">
+                                                <i class="fas fa-times"></i> Error
+                                            </span>
+                                        {% else %}
+                                            <span class="badge bg-secondary">
+                                                <i class="fas fa-clock"></i> Pendiente
+                                            </span>
+                                        {% endif %}
+                                    </dd>
+                                    
+                                    <dt class="col-sm-5">Estrategia:</dt>
+                                    <dd class="col-sm-7">{{ glosa.get_strategy_display }}</dd>
+                                    
+                                    <dt class="col-sm-5">Archivo:</dt>
+                                    <dd class="col-sm-7">{{ glosa.original_filename }}</dd>
+                                    
+                                    <dt class="col-sm-5">Tamaño:</dt>
+                                    <dd class="col-sm-7">{{ glosa.file_size|filesizeformat }}</dd>
+                                </dl>
+                            </div>
+                            <div class="col-md-6">
+                                <dl class="row">
+                                    <dt class="col-sm-5">Subido:</dt>
+                                    <dd class="col-sm-7">{{ glosa.created_at|date:"d/m/Y H:i" }}</dd>
+                                    
+                                    {% if glosa.processed_at %}
+                                        <dt class="col-sm-5">Procesado:</dt>
+                                        <dd class="col-sm-7">{{ glosa.processed_at|date:"d/m/Y H:i" }}</dd>
+                                    {% endif %}
+                                    
+                                    {% if glosa.processing_time %}
+                                        <dt class="col-sm-5">Tiempo:</dt>
+                                        <dd class="col-sm-7">{{ glosa.processing_time|floatformat:2 }}s</dd>
+                                    {% endif %}
+                                    
+                                    <dt class="col-sm-5">Liquidación:</dt>
+                                    <dd class="col-sm-7">{{ glosa.liquidacion_numero }}</dd>
+                                </dl>
+                            </div>
+                        </div>
+                        
+                        {% if glosa.error_message %}
+                            <div class="alert alert-danger mt-3">
+                                <h6><i class="fas fa-exclamation-triangle"></i> Error de Procesamiento</h6>
+                                <p class="mb-0">{{ glosa.error_message }}</p>
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="fas fa-chart-line"></i> Progreso</h5>
+                    </div>
+                    <div class="card-body text-center">
+                        {% if glosa.status == 'completed' %}
+                            <div class="mb-3">
+                                <i class="fas fa-check-circle fa-4x text-success"></i>
+                            </div>
+                            <h5 class="text-success">Procesamiento Completado</h5>
+                            {% if glosa.extracted_data %}
+                                <p class="text-muted">
+                                    {{ glosa.extracted_data.detalles|length }} procedimiento{{ glosa.extracted_data.detalles|length|pluralize:"s" }} extraído{{ glosa.extracted_data.detalles|length|pluralize:"s" }}
+                                </p>
+                            {% endif %}
+                        {% elif glosa.status == 'processing' %}
+                            <div class="mb-3">
+                                <i class="fas fa-cog fa-4x text-warning fa-spin"></i>
+                            </div>
+                            <h5 class="text-warning">Procesando...</h5>
+                            <div class="progress">
+                                <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                                     role="progressbar" style="width: 50%"></div>
+                            </div>
+                        {% elif glosa.status == 'error' %}
+                            <div class="mb-3">
+                                <i class="fas fa-times-circle fa-4x text-danger"></i>
+                            </div>
+                            <h5 class="text-danger">Error en Procesamiento</h5>
+                        {% else %}
+                            <div class="mb-3">
+                                <i class="fas fa-clock fa-4x text-secondary"></i>
+                            </div>
+                            <h5 class="text-secondary">En Cola</h5>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Extracted Data -->
+        {% if glosa.extracted_data and glosa.status == 'completed' %}
+            <!-- Header Information -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="fas fa-user-injured"></i> Información del Paciente</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <dl class="row">
+                                <dt class="col-sm-4">Paciente:</dt>
+                                <dd class="col-sm-8">{{ glosa.extracted_data.header.victima_nombre|default:"N/A" }}</dd>
+                                
+                                <dt class="col-sm-4">Documento:</dt>
+                                <dd class="col-sm-8">
+                                    {{ glosa.extracted_data.header.victima_documento_tipo|default:"" }} 
+                                    {{ glosa.extracted_data.header.victima_documento_numero|default:"N/A" }}
+                                </dd>
+                                
+                                <dt class="col-sm-4">Póliza:</dt>
+                                <dd class="col-sm-8">{{ glosa.extracted_data.header.poliza|default:"N/A" }}</dd>
+                                
+                                <dt class="col-sm-4">Diagnóstico:</dt>
+                                <dd class="col-sm-8">{{ glosa.extracted_data.header.diagnostico_cie10|default:"N/A" }}</dd>
+                            </dl>
+                        </div>
+                        <div class="col-md-6">
+                            <dl class="row">
+                                <dt class="col-sm-4">Siniestro:</dt>
+                                <dd class="col-sm-8">{{ glosa.extracted_data.header.fecha_siniestro|default:"N/A" }}</dd>
+                                
+                                <dt class="col-sm-4">Ingreso:</dt>
+                                <dd class="col-sm-8">{{ glosa.extracted_data.header.fecha_ingreso|default:"N/A" }}</dd>
+                                
+                                <dt class="col-sm-4">Reclamación:</dt>
+                                <dd class="col-sm-8">{{ glosa.extracted_data.header.numero_reclamacion|default:"N/A" }}</dd>
+                                
+                                <dt class="col-sm-4">Radicación:</dt>
+                                <dd class="col-sm-8">{{ glosa.extracted_data.header.numero_radicacion|default:"N/A" }}</dd>
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Financial Summary -->
+            {% if glosa.extracted_data.totales %}
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="fas fa-calculator"></i> Resumen Financiero</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-4">
+                                <div class="text-center p-3 border rounded">
+                                    <h6 class="text-muted">Valor Reclamado</h6>
+                                    <h4 class="text-primary">${{ glosa.extracted_data.totales.valor_reclamacion|floatformat:0 }}</h4>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="text-center p-3 border rounded">
+                                    <h6 class="text-muted">Valor Objetado</h6>
+                                    <h4 class="text-warning">${{ glosa.extracted_data.totales.valor_objetado_actual|floatformat:0 }}</h4>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="text-center p-3 border rounded">
+                                    <h6 class="text-muted">Valor Pagado</h6>
+                                    <h4 class="text-success">${{ glosa.extracted_data.totales.valor_pagado_acumulado|floatformat:0 }}</h4>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            {% endif %}
+
+            <!-- Procedures Details -->
+            {% if glosa.extracted_data.detalles %}
+                <div class="card mb-4">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0"><i class="fas fa-list-alt"></i> Detalle de Procedimientos</h5>
+                        <span class="badge bg-info">{{ glosa.extracted_data.detalles|length }} procedimiento{{ glosa.extracted_data.detalles|length|pluralize:"s" }}</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-hover">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Código</th>
+                                        <th>Descripción</th>
+                                        <th>Cant.</th>
+                                        <th>Valor Total</th>
+                                        <th>Valor Objetado</th>
+                                        <th>Estado</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for detalle in glosa.extracted_data.detalles %}
+                                        <tr>
+                                            <td><code>{{ detalle.codigo }}</code></td>
+                                            <td>
+                                                <div class="fw-bold">{{ detalle.descripcion|truncatechars:50 }}</div>
+                                                {% if detalle.observacion %}
+                                                    <small class="text-muted">{{ detalle.observacion|truncatechars:100 }}</small>
+                                                {% endif %}
+                                            </td>
+                                            <td>{{ detalle.cantidad }}</td>
+                                            <td class="text-end">${{ detalle.valor_total|floatformat:0 }}</td>
+                                            <td class="text-end">
+                                                {% if detalle.valor_objetado_actual > 0 %}
+                                                    <span class="text-danger">${{ detalle.valor_objetado_actual|floatformat:0 }}</span>
+                                                {% else %}
+                                                    <span class="text-success">$0</span>
+                                                {% endif %}
+                                            </td>
+                                            <td>
+                                                {% if detalle.valor_objetado_actual > 0 %}
+                                                    <span class="badge bg-warning">Objetado</span>
+                                                {% else %}
+                                                    <span class="badge bg-success">Aceptado</span>
+                                                {% endif %}
+                                            </td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            {% endif %}
+        {% endif %}
+
+        <!-- Processing Logs -->
+        {% if logs %}
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="fas fa-history"></i> Historial de Procesamiento</h5>
+                </div>
+                <div class="card-body">
+                    {% for log in logs %}
+                        <div class="d-flex mb-3">
+                            <div class="flex-shrink-0">
+                                {% if log.level == 'ERROR' %}
+                                    <i class="fas fa-times-circle text-danger"></i>
+                                {% elif log.level == 'WARNING' %}
+                                    <i class="fas fa-exclamation-triangle text-warning"></i>
+                                {% else %}
+                                    <i class="fas fa-info-circle text-info"></i>
+                                {% endif %}
+                            </div>
+                            <div class="flex-grow-1 ms-3">
+                                <div class="fw-bold">{{ log.message }}</div>
+                                <small class="text-muted">{{ log.timestamp|date:"d/m/Y H:i:s" }}</small>
+                            </div>
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Auto-refresh si está procesando
+    {% if glosa.status == 'processing' %}
+        // Polling cada 5 segundos para verificar estado
+        setInterval(function() {
+            fetch(`/api/glosas/{{ glosa.id }}/status/`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status !== 'processing') {
+                        location.reload();
+                    }
+                })
+                .catch(error => console.error('Error:', error));
+        }, 5000);
+    {% endif %}
+</script>
+{% endblock %}
