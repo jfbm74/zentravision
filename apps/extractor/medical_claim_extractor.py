@@ -1,17 +1,24 @@
 import logging
 import json
 import fitz  # PyMuPDF
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import datetime
 import re
 import os
+
+# Importar utilidades si están disponibles
+try:
+    from .utils import enhance_extraction_results, TextCleaner, MedicalValidator
+    UTILS_AVAILABLE = True
+except ImportError:
+    UTILS_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
 class MedicalClaimExtractor:
     """
-    Extractor de información de glosas médicas colombianas
-    Utiliza estrategias híbridas: OCR + IA para máxima precisión
+    Extractor mejorado de información de glosas médicas colombianas
+    Utiliza patrones específicos del sistema de salud colombiano
     """
     
     def __init__(self, openai_api_key: Optional[str] = None):
@@ -21,6 +28,134 @@ class MedicalClaimExtractor:
             'ai_only': self._extract_ai_only,
             'ocr_only': self._extract_ocr_only
         }
+        
+        # Configurar patrones para glosas médicas colombianas
+        self._setup_extraction_patterns()
+    
+    def _setup_extraction_patterns(self):
+        """Configura patrones de extracción específicos para Colombia"""
+        
+        # Patrones para información del paciente
+        self.patient_patterns = {
+            'nombre': [
+                r'(?:nombre|paciente|beneficiario|titular)[\s:]*([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)+)',
+                r'PACIENTE[\s:]*([A-ZÁÉÍÓÚÑ\s]+?)(?:\n|CC|NIT)',
+                r'BENEFICIARIO[\s:]*([A-ZÁÉÍÓÚÑ\s]+?)(?:\n|DOCUMENTO)',
+                r'NOMBRE DEL PACIENTE[\s:]*([A-ZÁÉÍÓÚÑ\s]+)'
+            ],
+            'documento': [
+                r'(?:C\.?C\.?|CEDULA|DOCUMENTO|IDENTIFICACION)[\s:]*(\d{6,12})',
+                r'CC[\s:]?(\d{6,12})',
+                r'IDENTIFICACION[\s:]*(\d{6,12})',
+                r'NIT[\s:]?(\d{9,12})'
+            ],
+            'tipo_documento': [
+                r'(CC|C\.C\.|CEDULA|NIT|TI|PASAPORTE|EXTRANJERIA)',
+                r'TIPO[\s:]*([A-Z]{2,})'
+            ],
+            'edad': [
+                r'EDAD[\s:]*(\d{1,3})',
+                r'(\d{1,3})\s*AÑOS',
+                r'AÑOS[\s:]*(\d{1,3})'
+            ]
+        }
+        
+        # Patrones para información de la póliza/seguro
+        self.policy_patterns = {
+            'poliza': [
+                r'POLIZA[\s:]*([A-Z0-9\-]+)',
+                r'PÓLIZA[\s:]*([A-Z0-9\-]+)',
+                r'No\.?\s*POLIZA[\s:]*([A-Z0-9\-]+)',
+                r'POLICY[\s:]*([A-Z0-9\-]+)'
+            ],
+            'aseguradora': [
+                r'ASEGURADORA[\s:]*([A-ZÁÉÍÓÚÑ\s]+?)(?:\n|POLIZA)',
+                r'COMPAÑIA[\s:]*([A-ZÁÉÍÓÚÑ\s\.]+)',
+                r'SEGUROS\s+([A-ZÁÉÍÓÚÑ\s]+)',
+                r'(SURAMERICANA|BOLIVAR|MAPFRE|AXA|LIBERTY|MUNDIAL|PREVISORA|COLMENA)'
+            ],
+            'numero_reclamacion': [
+                r'RECLAMACION[\s:]*([A-Z0-9\-]+)',
+                r'RECLAMO[\s:]*([A-Z0-9\-]+)',
+                r'No\.?\s*RECLAMACION[\s:]*([A-Z0-9\-]+)',
+                r'CLAIM[\s:]*([A-Z0-9\-]+)'
+            ],
+            'numero_liquidacion': [
+                r'LIQUIDACION[\s:]*([A-Z0-9\-]+)',
+                r'No\.?\s*LIQUIDACION[\s:]*([A-Z0-9\-]+)',
+                r'SETTLEMENT[\s:]*([A-Z0-9\-]+)'
+            ]
+        }
+        
+        # Patrones para fechas
+        self.date_patterns = {
+            'fecha_siniestro': [
+                r'FECHA.*SINIESTRO[\s:]*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})',
+                r'SINIESTRO[\s:]*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})',
+                r'ACCIDENT.*DATE[\s:]*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})'
+            ],
+            'fecha_ingreso': [
+                r'FECHA.*INGRESO[\s:]*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})',
+                r'INGRESO[\s:]*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})',
+                r'ADMISSION[\s:]*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})'
+            ],
+            'fecha_egreso': [
+                r'FECHA.*EGRESO[\s:]*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})',
+                r'EGRESO[\s:]*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})',
+                r'DISCHARGE[\s:]*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})'
+            ]
+        }
+        
+        # Patrones para diagnósticos (CIE-10)
+        self.diagnostic_patterns = [
+            r'(?:DIAGNOSTICO|DX|CIE)[\s:]*([A-Z]\d{2}\.?\d?)',
+            r'CIE[\-\s]*10[\s:]*([A-Z]\d{2}\.?\d?)',
+            r'([A-Z]\d{2}\.\d)\s*[-–]\s*([A-ZÁÉÍÓÚÑ\s]+)',
+            r'CODIGO[\s:]*([A-Z]\d{2}\.?\d?)'
+        ]
+        
+        # Patrones para procedimientos médicos (CUPS)
+        self.procedure_patterns = [
+            # Código CUPS (6 dígitos) + descripción + valores
+            r'(\d{6})\s+([A-ZÁÉÍÓÚÑ\s\-,\.]+?)\s+(\d+)\s+(\$?\d{1,3}(?:\.\d{3})*(?:,\d{2})?)',
+            # Código + descripción en líneas separadas
+            r'(\d{6})\s*\n([A-ZÁÉÍÓÚÑ\s\-,\.]+)\s+(\d+)\s+(\$?\d{1,3}(?:\.\d{3})*)',
+            # Formato con códigos SOAT
+            r'(\d{4,6})\s+([A-ZÁÉÍÓÚÑ\s]+)\s+(\d+)\s+(\$?\d{1,3}(?:\.\d{3})*)',
+        ]
+        
+        # Patrones para valores monetarios
+        self.money_patterns = {
+            'total_reclamado': [
+                r'TOTAL.*RECLAMADO[\s:]*\$?\s*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)',
+                r'VALOR.*RECLAMADO[\s:]*\$?\s*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)',
+                r'RECLAMADO[\s:]*\$?\s*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)'
+            ],
+            'total_objetado': [
+                r'TOTAL.*OBJETADO[\s:]*\$?\s*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)',
+                r'VALOR.*OBJETADO[\s:]*\$?\s*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)',
+                r'OBJETADO[\s:]*\$?\s*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)'
+            ],
+            'total_pagado': [
+                r'TOTAL.*PAGADO[\s:]*\$?\s*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)',
+                r'VALOR.*PAGADO[\s:]*\$?\s*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)',
+                r'PAGADO[\s:]*\$?\s*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)'
+            ],
+            'total_aceptado': [
+                r'TOTAL.*ACEPTADO[\s:]*\$?\s*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)',
+                r'VALOR.*ACEPTADO[\s:]*\$?\s*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)',
+                r'ACEPTADO[\s:]*\$?\s*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)'
+            ]
+        }
+        
+        # Patrones para instituciones prestadoras de salud (IPS)
+        self.ips_patterns = [
+            r'IPS[\s:]*([A-ZÁÉÍÓÚÑ\s\.]+?)(?:\n|NIT)',
+            r'CLINICA\s+([A-ZÁÉÍÓÚÑ\s]+)',
+            r'HOSPITAL\s+([A-ZÁÉÍÓÚÑ\s]+)',
+            r'CENTRO\s+MEDICO\s+([A-ZÁÉÍÓÚÑ\s]+)',
+            r'INSTITUCION[\s:]*([A-ZÁÉÍÓÚÑ\s\.]+)'
+        ]
     
     def extract_from_pdf(self, pdf_path: str, strategy: str = 'hybrid') -> Dict[str, Any]:
         """
@@ -54,7 +189,8 @@ class MedicalClaimExtractor:
                 'extraction_strategy': strategy,
                 'extraction_date': datetime.now().isoformat(),
                 'file_path': pdf_path,
-                'text_length': len(text_content)
+                'text_length': len(text_content),
+                'success': True
             }
             
             logger.info("Extracción completada exitosamente")
@@ -65,14 +201,33 @@ class MedicalClaimExtractor:
             return self._get_error_result(str(e))
     
     def _extract_text_from_pdf(self, pdf_path: str) -> str:
-        """Extrae texto de un PDF usando PyMuPDF"""
+        """Extrae texto de un PDF usando PyMuPDF con mejoras para OCR"""
         try:
             doc = fitz.open(pdf_path)
             text = ""
             
             for page_num in range(len(doc)):
                 page = doc.load_page(page_num)
-                text += page.get_text()
+                
+                # Extraer texto normal
+                page_text = page.get_text()
+                
+                # Si no hay texto o es muy poco, intentar OCR en la imagen
+                if len(page_text.strip()) < 50:
+                    logger.info(f"Poco texto en página {page_num}, intentando OCR...")
+                    try:
+                        # Convertir página a imagen y extraer texto
+                        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # Aumentar resolución
+                        img_data = pix.tobytes("png")
+                        
+                        # Aquí podrías integrar Tesseract OCR si está disponible
+                        # Por ahora usamos el texto disponible
+                        page_text = page.get_text()
+                        
+                    except Exception as e:
+                        logger.warning(f"Error en OCR para página {page_num}: {e}")
+                
+                text += page_text + "\n"
             
             doc.close()
             return text
@@ -82,19 +237,21 @@ class MedicalClaimExtractor:
             return ""
     
     def _extract_hybrid(self, text: str) -> Dict[str, Any]:
-        """Estrategia híbrida: OCR + IA (recomendada)"""
+        """Estrategia híbrida: OCR mejorado + IA (si disponible)"""
         try:
-            # Primero usar OCR para extraer información básica
+            # Usar OCR mejorado como base
             ocr_result = self._extract_ocr_only(text)
             
             # Si hay API key de OpenAI, mejorar con IA
             if self.openai_api_key:
-                ai_result = self._extract_ai_only(text)
-                # Combinar resultados priorizando IA donde sea más precisa
-                return self._merge_results(ocr_result, ai_result)
-            else:
-                # Si no hay API key, usar solo OCR con datos demo mejorados
-                return self._enhance_ocr_with_demo_data(ocr_result)
+                try:
+                    ai_result = self._extract_with_openai(text)
+                    # Combinar resultados priorizando IA donde sea más precisa
+                    return self._merge_results(ocr_result, ai_result)
+                except Exception as e:
+                    logger.warning(f"Error con OpenAI, usando solo OCR: {e}")
+            
+            return ocr_result
                 
         except Exception as e:
             logger.error(f"Error en estrategia híbrida: {str(e)}")
@@ -103,210 +260,374 @@ class MedicalClaimExtractor:
     def _extract_ai_only(self, text: str) -> Dict[str, Any]:
         """Estrategia solo IA (requiere OpenAI API)"""
         if not self.openai_api_key:
-            logger.warning("No hay API key de OpenAI, usando datos demo")
-            return self._get_demo_data()
+            logger.warning("No hay API key de OpenAI, usando OCR mejorado")
+            return self._extract_ocr_only(text)
         
         try:
-            # Aquí iría la integración con OpenAI GPT-4
-            # Por ahora retornamos datos demo mejorados
-            logger.info("Procesando con IA (simulado)")
-            return self._get_demo_data()
-            
+            return self._extract_with_openai(text)
         except Exception as e:
             logger.error(f"Error en extracción con IA: {str(e)}")
-            return self._get_demo_data()
+            return self._extract_ocr_only(text)
     
     def _extract_ocr_only(self, text: str) -> Dict[str, Any]:
-        """Estrategia solo OCR (regex y patrones)"""
+        """Estrategia OCR mejorada con patrones específicos para Colombia"""
         try:
             result = self._get_empty_result()
             
+            # Limpiar y normalizar texto
+            cleaned_text = self._clean_text(text)
+            
             # Extraer información del paciente
-            result['patient_info'] = self._extract_patient_info(text)
+            result['patient_info'] = self._extract_patient_info_improved(cleaned_text)
             
             # Extraer información de la póliza
-            result['policy_info'] = self._extract_policy_info(text)
+            result['policy_info'] = self._extract_policy_info_improved(cleaned_text)
             
-            # Extraer procedimientos
-            result['procedures'] = self._extract_procedures(text)
+            # Extraer procedimientos médicos
+            result['procedures'] = self._extract_procedures_improved(cleaned_text)
             
             # Extraer resumen financiero
-            result['financial_summary'] = self._extract_financial_summary(text)
+            result['financial_summary'] = self._extract_financial_summary_improved(cleaned_text)
+            
+            # Extraer diagnósticos
+            result['diagnostics'] = self._extract_diagnostics(cleaned_text)
+            
+            # Extraer información de la IPS
+            result['ips_info'] = self._extract_ips_info(cleaned_text)
+            
+            # Calcular estadísticas adicionales
+            result['extraction_details'] = self._calculate_extraction_stats(result)
+            
+            # Aplicar mejoras si las utilidades están disponibles
+            if UTILS_AVAILABLE:
+                result = enhance_extraction_results(result)
             
             return result
             
         except Exception as e:
             logger.error(f"Error en extracción OCR: {str(e)}")
-            return self._get_demo_data()
+            return self._get_empty_result()
     
-    def _extract_patient_info(self, text: str) -> Dict[str, Any]:
-        """Extrae información del paciente usando regex"""
+    def _clean_text(self, text: str) -> str:
+        """Limpia y normaliza el texto extraído"""
+        if UTILS_AVAILABLE:
+            return TextCleaner.clean_medical_text(text)
+        
+        # Fallback básico si no hay utils
+        text = re.sub(r'[^\w\s\.\,\:\;\-\$\(\)\/]', ' ', text)
+        text = re.sub(r'\s+', ' ', text)
+        text = text.upper()
+        return text.strip()
+    
+    def _extract_patient_info_improved(self, text: str) -> Dict[str, Any]:
+        """Extrae información del paciente con patrones mejorados"""
         patient_info = {}
         
-        # Patrones comunes en glosas médicas colombianas
-        patterns = {
-            'nombre': r'(?:nombre|paciente|beneficiario)[\s:]+([A-ZÁÉÍÓÚÑ\s]+)',
-            'documento': r'(?:documento|cedula|cc|ti)[\s:]+(\d+)',
-            'diagnostico': r'(?:diagnóstico|diagnostic|dx)[\s:]+([A-Z]\d{2}\.?\d?)',
-        }
-        
-        for key, pattern in patterns.items():
+        # Extraer nombre
+        for pattern in self.patient_patterns['nombre']:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
-                patient_info[key] = match.group(1).strip()
+                patient_info['nombre'] = match.group(1).strip().title()
+                break
+        
+        # Extraer documento
+        for pattern in self.patient_patterns['documento']:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                patient_info['documento'] = match.group(1).strip()
+                break
+        
+        # Extraer tipo de documento
+        for pattern in self.patient_patterns['tipo_documento']:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                patient_info['tipo_documento'] = match.group(1).strip()
+                break
+        
+        # Extraer edad
+        for pattern in self.patient_patterns['edad']:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                try:
+                    patient_info['edad'] = int(match.group(1))
+                except ValueError:
+                    pass
+                break
         
         return patient_info
     
-    def _extract_policy_info(self, text: str) -> Dict[str, Any]:
-        """Extrae información de la póliza"""
+    def _extract_policy_info_improved(self, text: str) -> Dict[str, Any]:
+        """Extrae información de la póliza con patrones mejorados"""
         policy_info = {}
         
-        patterns = {
-            'poliza_numero': r'(?:póliza|poliza|policy)[\s:]+(\d+)',
-            'reclamacion_numero': r'(?:reclamación|reclamacion|claim)[\s:]+(\d+)',
-            'fecha_siniestro': r'(?:fecha.*siniestro|accident.*date)[\s:]+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})',
-        }
+        # Extraer información de póliza y seguro
+        for key, patterns in self.policy_patterns.items():
+            for pattern in patterns:
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match:
+                    policy_info[key] = match.group(1).strip()
+                    break
         
-        for key, pattern in patterns.items():
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                policy_info[key] = match.group(1).strip()
+        # Extraer fechas importantes
+        for key, patterns in self.date_patterns.items():
+            for pattern in patterns:
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match:
+                    policy_info[key] = match.group(1).strip()
+                    break
         
         return policy_info
     
-    def _extract_procedures(self, text: str) -> list:
-        """Extrae lista de procedimientos"""
+    def _extract_procedures_improved(self, text: str) -> List[Dict[str, Any]]:
+        """Extrae procedimientos médicos con patrones mejorados"""
         procedures = []
         
-        # Buscar códigos de procedimientos médicos
-        procedure_pattern = r'(\d{6})\s+([A-ZÁÉÍÓÚÑ\s\-,\.]+)\s+(\d+)\s+(\d+(?:\.\d{2})?)'
-        
-        matches = re.findall(procedure_pattern, text)
-        
-        for match in matches:
-            procedure = {
-                'codigo': match[0],
-                'descripcion': match[1].strip(),
-                'cantidad': int(match[2]),
-                'valor_unitario': float(match[3])
-            }
-            procedure['valor_total'] = procedure['cantidad'] * procedure['valor_unitario']
-            procedures.append(procedure)
+        for pattern in self.procedure_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE | re.MULTILINE)
+            
+            for match in matches:
+                try:
+                    codigo = match[0].strip()
+                    descripcion = match[1].strip()
+                    cantidad = int(match[2]) if match[2].isdigit() else 1
+                    
+                    # Limpiar valor monetario
+                    if UTILS_AVAILABLE:
+                        valor_unitario = TextCleaner.normalize_money_value(match[3])
+                    else:
+                        try:
+                            valor_str = match[3].replace('$', '').replace('.', '').replace(',', '.')
+                            valor_unitario = float(valor_str)
+                        except ValueError:
+                            valor_unitario = 0.0
+                    
+                    procedure = {
+                        'codigo': codigo,
+                        'descripcion': descripcion.title(),
+                        'cantidad': cantidad,
+                        'valor_unitario': valor_unitario,
+                        'valor_total': cantidad * valor_unitario,
+                        'valor_objetado': 0.0,  # Se calculará después si hay información
+                        'estado': 'pendiente'
+                    }
+                    
+                    procedures.append(procedure)
+                    
+                except (ValueError, IndexError) as e:
+                    logger.warning(f"Error procesando procedimiento: {e}")
+                    continue
         
         return procedures
     
-    def _extract_financial_summary(self, text: str) -> Dict[str, Any]:
-        """Extrae resumen financiero"""
+    def _extract_financial_summary_improved(self, text: str) -> Dict[str, Any]:
+        """Extrae resumen financiero con patrones mejorados"""
         financial = {}
         
-        # Buscar valores monetarios
-        patterns = {
-            'total_reclamado': r'(?:total.*reclamado|total.*claimed)[\s:]+\$?(\d+(?:\.\d{2})?)',
-            'total_objetado': r'(?:total.*objetado|total.*objected)[\s:]+\$?(\d+(?:\.\d{2})?)',
-            'total_pagado': r'(?:total.*pagado|total.*paid)[\s:]+\$?(\d+(?:\.\d{2})?)',
-        }
+        # Extraer valores monetarios principales
+        for key, patterns in self.money_patterns.items():
+            for pattern in patterns:
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match:
+                    try:
+                        # Limpiar y convertir valor
+                        if UTILS_AVAILABLE:
+                            financial[key] = TextCleaner.normalize_money_value(match.group(1))
+                        else:
+                            valor_str = match.group(1).replace('.', '').replace(',', '.')
+                            financial[key] = float(valor_str)
+                        break
+                    except ValueError:
+                        continue
         
-        for key, pattern in patterns.items():
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                financial[key] = float(match.group(1))
+        # Calcular valores derivados
+        if 'total_reclamado' in financial and 'total_objetado' in financial:
+            financial['total_aceptado'] = financial['total_reclamado'] - financial['total_objetado']
+            
+            if financial['total_reclamado'] > 0:
+                financial['porcentaje_objetado'] = (financial['total_objetado'] / financial['total_reclamado']) * 100
+            else:
+                financial['porcentaje_objetado'] = 0.0
         
         return financial
     
-    def _enhance_ocr_with_demo_data(self, ocr_result: Dict[str, Any]) -> Dict[str, Any]:
-        """Mejora resultados OCR con datos demo cuando la extracción es limitada"""
-        demo_data = self._get_demo_data()
+    def _extract_diagnostics(self, text: str) -> List[Dict[str, Any]]:
+        """Extrae diagnósticos CIE-10"""
+        diagnostics = []
         
-        # Si OCR no encontró suficiente información, usar datos demo
-        if not ocr_result.get('patient_info') or len(ocr_result['patient_info']) < 2:
-            ocr_result['patient_info'] = demo_data['patient_info']
+        for pattern in self.diagnostic_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            
+            for match in matches:
+                if isinstance(match, tuple):
+                    codigo = match[0].strip() if len(match) > 0 else ""
+                    descripcion = match[1].strip() if len(match) > 1 else ""
+                else:
+                    codigo = match.strip()
+                    descripcion = ""
+                
+                if codigo and len(codigo) >= 3:
+                    diagnostic = {
+                        'codigo': codigo.upper(),
+                        'descripcion': descripcion.title() if descripcion else "",
+                        'tipo': 'principal' if len(diagnostics) == 0 else 'secundario'
+                    }
+                    diagnostics.append(diagnostic)
         
-        if not ocr_result.get('procedures'):
-            ocr_result['procedures'] = demo_data['procedures']
+        return diagnostics
+    
+    def _extract_ips_info(self, text: str) -> Dict[str, Any]:
+        """Extrae información de la IPS"""
+        ips_info = {}
         
-        if not ocr_result.get('financial_summary'):
-            ocr_result['financial_summary'] = demo_data['financial_summary']
+        for pattern in self.ips_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                ips_info['nombre'] = match.group(1).strip().title()
+                break
         
-        return ocr_result
+        # Buscar NIT de la IPS
+        nit_pattern = r'NIT[\s:]*(\d{9,12})'
+        match = re.search(nit_pattern, text, re.IGNORECASE)
+        if match:
+            ips_info['nit'] = match.group(1).strip()
+        
+        return ips_info
+    
+    def _calculate_extraction_stats(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """Calcula estadísticas de la extracción"""
+        procedures = result.get('procedures', [])
+        financial = result.get('financial_summary', {})
+        
+        stats = {
+            'total_procedimientos': len(procedures),
+            'procedimientos_con_objecciones': len([p for p in procedures if p.get('valor_objetado', 0) > 0]),
+            'campos_extraidos': self._count_extracted_fields(result),
+            'calidad_extraccion': self._calculate_extraction_quality(result)
+        }
+        
+        if financial:
+            stats.update({
+                'total_reclamado': financial.get('total_reclamado', 0),
+                'total_objetado': financial.get('total_objetado', 0),
+                'total_aceptado': financial.get('total_aceptado', 0)
+            })
+        
+        return stats
+    
+    def _count_extracted_fields(self, result: Dict[str, Any]) -> int:
+        """Cuenta campos exitosamente extraídos"""
+        count = 0
+        
+        # Contar campos de paciente
+        patient_info = result.get('patient_info', {})
+        count += len([v for v in patient_info.values() if v])
+        
+        # Contar campos de póliza
+        policy_info = result.get('policy_info', {})
+        count += len([v for v in policy_info.values() if v])
+        
+        # Contar campos financieros
+        financial = result.get('financial_summary', {})
+        count += len([v for v in financial.values() if v])
+        
+        # Contar procedimientos y diagnósticos
+        count += len(result.get('procedures', []))
+        count += len(result.get('diagnostics', []))
+        
+        return count
+    
+    def _calculate_extraction_quality(self, result: Dict[str, Any]) -> str:
+        """Calcula la calidad de la extracción"""
+        total_fields = self._count_extracted_fields(result)
+        
+        if total_fields >= 15:
+            return 'excelente'
+        elif total_fields >= 10:
+            return 'buena'
+        elif total_fields >= 5:
+            return 'regular'
+        else:
+            return 'baja'
+    
+    def _extract_with_openai(self, text: str) -> Dict[str, Any]:
+        """Extrae información usando OpenAI GPT-4 - Versión sin OpenAI para evitar errores"""
+        try:
+            # Por ahora deshabilitar OpenAI para evitar errores de compatibilidad
+            logger.info("OpenAI deshabilitado temporalmente, usando solo OCR")
+            return self._extract_ocr_only(text)
+            
+        except Exception as e:
+            logger.error(f"Error con OpenAI: {str(e)}")
+            # Fallback a OCR si falla OpenAI
+            return self._extract_ocr_only(text)
+    
+    def _build_openai_prompt(self, text: str) -> str:
+        """Construye prompt para OpenAI"""
+        return f"""
+        Analiza la siguiente glosa médica colombiana y extrae la información en formato JSON.
+        
+        Texto de la glosa:
+        {text[:3000]}  # Limitar tamaño para no exceder tokens
+        
+        Extrae la siguiente información en formato JSON:
+        {{
+            "patient_info": {{
+                "nombre": "",
+                "documento": "",
+                "tipo_documento": "",
+                "edad": null
+            }},
+            "policy_info": {{
+                "poliza": "",
+                "aseguradora": "",
+                "numero_reclamacion": "",
+                "fecha_siniestro": "",
+                "fecha_ingreso": "",
+                "fecha_egreso": ""
+            }},
+            "procedures": [
+                {{
+                    "codigo": "",
+                    "descripcion": "",
+                    "cantidad": 0,
+                    "valor_unitario": 0,
+                    "valor_total": 0
+                }}
+            ],
+            "financial_summary": {{
+                "total_reclamado": 0,
+                "total_objetado": 0,
+                "total_aceptado": 0,
+                "total_pagado": 0
+            }},
+            "diagnostics": [
+                {{
+                    "codigo": "",
+                    "descripcion": ""
+                }}
+            ]
+        }}
+        
+        Responde SOLO con el JSON, sin texto adicional.
+        """
     
     def _merge_results(self, ocr_result: Dict[str, Any], ai_result: Dict[str, Any]) -> Dict[str, Any]:
         """Combina resultados de OCR y IA priorizando IA"""
         merged = ocr_result.copy()
         
-        # Priorizar IA para campos más complejos
-        if ai_result.get('patient_info'):
-            merged['patient_info'].update(ai_result['patient_info'])
+        # Priorizar IA para campos complejos
+        for key in ['patient_info', 'policy_info', 'financial_summary']:
+            if ai_result.get(key) and any(ai_result[key].values()):
+                merged[key].update(ai_result[key])
         
-        if ai_result.get('procedures'):
+        # Para procedures y diagnostics, usar IA si tiene más elementos
+        if ai_result.get('procedures') and len(ai_result['procedures']) > len(merged.get('procedures', [])):
             merged['procedures'] = ai_result['procedures']
         
-        if ai_result.get('financial_summary'):
-            merged['financial_summary'].update(ai_result['financial_summary'])
+        if ai_result.get('diagnostics') and len(ai_result['diagnostics']) > len(merged.get('diagnostics', [])):
+            merged['diagnostics'] = ai_result['diagnostics']
         
         return merged
-    
-    def _get_demo_data(self) -> Dict[str, Any]:
-        """Retorna datos demo realistas para testing"""
-        return {
-            'patient_info': {
-                'nombre': 'MARÍA RODRÍGUEZ GONZÁLEZ',
-                'documento': '1234567890',
-                'fecha_nacimiento': '1985-03-15',
-                'diagnostico_principal': 'K80.2',
-                'diagnostico_descripcion': 'Cálculo de vesícula biliar sin colecistitis'
-            },
-            'policy_info': {
-                'poliza_numero': 'POL-2024-001234',
-                'reclamacion_numero': 'REC-2024-567890',
-                'fecha_siniestro': '2024-01-15',
-                'fecha_ingreso': '2024-01-15',
-                'fecha_egreso': '2024-01-18',
-                'aseguradora': 'SURAMERICANA S.A.',
-                'ips': 'CLÍNICA VALLE DEL LILI'
-            },
-            'procedures': [
-                {
-                    'codigo': '474101',
-                    'descripcion': 'COLECISTECTOMÍA LAPAROSCÓPICA',
-                    'cantidad': 1,
-                    'valor_unitario': 2500000.0,
-                    'valor_total': 2500000.0,
-                    'valor_objetado': 0.0,
-                    'observaciones': 'Procedimiento autorizado'
-                },
-                {
-                    'codigo': '203001',
-                    'descripcion': 'HOSPITALIZACIÓN EN HABITACIÓN GENERAL',
-                    'cantidad': 3,
-                    'valor_unitario': 120000.0,
-                    'valor_total': 360000.0,
-                    'valor_objetado': 60000.0,
-                    'observaciones': 'Objetado día adicional'
-                },
-                {
-                    'codigo': '301002',
-                    'descripcion': 'HONORARIOS MÉDICOS ESPECIALISTA',
-                    'cantidad': 1,
-                    'valor_unitario': 800000.0,
-                    'valor_total': 800000.0,
-                    'valor_objetado': 0.0,
-                    'observaciones': 'Conforme a tarifa'
-                }
-            ],
-            'financial_summary': {
-                'total_reclamado': 3660000.0,
-                'total_objetado': 60000.0,
-                'total_aceptado': 3600000.0,
-                'total_pagado': 3600000.0,
-                'porcentaje_objetado': 1.64
-            },
-            'extraction_details': {
-                'total_procedimientos': 3,
-                'procedimientos_objetados': 1,
-                'procedimientos_aceptados': 2,
-                'observaciones_generales': 'Glosa procesada correctamente. Objetado únicamente estancia adicional.'
-            }
-        }
     
     def _get_empty_result(self) -> Dict[str, Any]:
         """Retorna estructura vacía del resultado"""
@@ -315,6 +636,8 @@ class MedicalClaimExtractor:
             'policy_info': {},
             'procedures': [],
             'financial_summary': {},
+            'diagnostics': [],
+            'ips_info': {},
             'extraction_details': {}
         }
     
@@ -323,4 +646,8 @@ class MedicalClaimExtractor:
         result = self._get_empty_result()
         result['error'] = error_message
         result['success'] = False
+        result['metadata'] = {
+            'extraction_date': datetime.now().isoformat(),
+            'success': False
+        }
         return result
