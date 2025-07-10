@@ -1,6 +1,9 @@
 # ==========================================
 # apps/core/urls.py
 # ==========================================
+# ==========================================
+# apps/core/urls.py - MEJORADO
+# ==========================================
 
 from django.urls import path
 from django.contrib.auth import views as auth_views
@@ -20,9 +23,15 @@ urlpatterns = [
     path('glosas/<uuid:glosa_id>/', views.glosa_detail, name='glosa_detail'),
     path('glosas/<uuid:glosa_id>/reprocess/', views.reprocess_glosa, name='reprocess_glosa'),
     
-    # Descargas
+    # Descargas - MEJORADO con nuevos formatos
     path('download/<uuid:glosa_id>/<str:file_type>/', views.download_file, name='download_file'),
     
     # API endpoints
     path('api/glosas/<uuid:glosa_id>/status/', views.api_glosa_status, name='api_glosa_status'),
 ]
+
+# Formatos de descarga disponibles:
+# - 'json': Datos extraídos en formato JSON
+# - 'csv': CSV en formato Excel IPS (NUEVO - formato principal)
+# - 'csv_legacy': CSV en formato anterior (para compatibilidad)
+# - 'original': Archivo PDF original
