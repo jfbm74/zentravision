@@ -1,9 +1,13 @@
-<!-- ==========================================
-     apps/templates/glosa_detail.html (CORREGIDO)
-     ========================================== -->
+<!-- apps/templates/glosa_detail.html ACTUALIZADO -->
 {% extends 'base.html' %}
 
-{% block title %}Glosa {{ liquidacion_numero }} - Zentravision{% endblock %}
+{% block title %}
+    {% if glosa.is_master_document %}
+        Batch {{ liquidacion_numero }} - Zentravision
+    {% else %}
+        Glosa {{ liquidacion_numero }} - Zentravision
+    {% endif %}
+{% endblock %}
 
 {% block content %}
 <div class="row mt-4">
@@ -11,8 +15,34 @@
         <!-- Header -->
         <div class="d-flex justify-content-between align-items-center mb-4">
             <div>
-                <h1><i class="fas fa-file-medical text-primary"></i> Detalle de Glosa</h1>
+                <h1>
+                    {% if glosa.is_master_document %}
+                        <i class="fas fa-layer-group text-primary"></i> Documento Múltiple
+                    {% elif glosa.parent_document %}
+                        <i class="fas fa-user-injured text-info"></i> Paciente {{ glosa.patient_section_number }}
+                    {% else %}
+                        <i class="fas fa-file-medical text-primary"></i> Detalle de Glosa
+                    {% endif %}
+                </h1>
                 <p class="text-muted mb-0">{{ glosa.original_filename }}</p>
+                
+                <!-- Breadcrumb for child documents -->
+                {% if glosa.parent_document %}
+                    <nav aria-label="breadcrumb">
+                        <ol class="breadcrumb">
+                            <li class="breadcrumb-item">
+                                <a href="{% url 'glosa_detail' glosa.parent_document.id %}">
+                                    {{ glosa.parent_document.original_filename }}
+                                </a>
+                            </li>
+                            <li class="breadcrumb-item active">
+                                Paciente {{ glosa.patient_section_number }}
+                            </li>
+                        </ol>
+                    </nav>
+                {% endif %}
+                
+                <!-- Quality badge -->
                 {% if extraction_details.calidad_extraccion %}
                     <span class="badge 
                         {% if extraction_details.calidad_extraccion == 'excelente' %}bg-success
@@ -24,7 +54,8 @@
                 {% endif %}
             </div>
             <div>
-                {% if glosa.status == 'completed' %}
+                <!-- Actions for completed documents -->
+                {% if glosa.status == 'completed' and not glosa.is_master_document %}
                     <a href="{% url 'download_file' glosa.id 'json' %}" class="btn btn-success me-2">
                         <i class="fas fa-download"></i> JSON
                     </a>
@@ -32,6 +63,15 @@
                         <i class="fas fa-download"></i> CSV
                     </a>
                 {% endif %}
+                
+                <!-- Actions for master documents -->
+                {% if glosa.is_master_document and batch %}
+                    <a href="{% url 'batch_detail' batch.id %}" class="btn btn-info me-2">
+                        <i class="fas fa-layer-group"></i> Ver Batch
+                    </a>
+                {% endif %}
+                
+                <!-- Reprocess button -->
                 {% if glosa.status in 'completed,error' %}
                     <form method="post" action="{% url 'reprocess_glosa' glosa.id %}" class="d-inline">
                         {% csrf_token %}
@@ -41,11 +81,35 @@
                         </button>
                     </form>
                 {% endif %}
-                <a href="{% url 'glosa_list' %}" class="btn btn-secondary">
-                    <i class="fas fa-arrow-left"></i> Volver
-                </a>
+                
+                <!-- Back button -->
+                {% if glosa.parent_document %}
+                    <a href="{% url 'batch_detail' glosa.parent_document.processing_batch.id %}" class="btn btn-secondary">
+                        <i class="fas fa-arrow-left"></i> Volver al Batch
+                    </a>
+                {% else %}
+                    <a href="{% url 'glosa_list' %}" class="btn btn-secondary">
+                        <i class="fas fa-arrow-left"></i> Volver
+                    </a>
+                {% endif %}
             </div>
         </div>
+
+        <!-- Master Document Information -->
+        {% if glosa.is_master_document %}
+            <div class="alert alert-info">
+                <h5><i class="fas fa-info-circle"></i> Documento Múltiple</h5>
+                <p class="mb-0">
+                    Este documento contiene <strong>{{ glosa.total_sections }} pacientes</strong>. 
+                    Cada paciente ha sido procesado como un documento individual.
+                    {% if batch %}
+                        <a href="{% url 'batch_detail' batch.id %}" class="alert-link">
+                            Ver progreso del batch →
+                        </a>
+                    {% endif %}
+                </p>
+            </div>
+        {% endif %}
 
         <!-- Status and Info -->
         <div class="row mb-4">
@@ -76,6 +140,19 @@
                                             <span class="badge bg-secondary">
                                                 <i class="fas fa-clock"></i> Pendiente
                                             </span>
+                                        {% endif %}
+                                    </dd>
+                                    
+                                    <dt class="col-sm-5">Tipo:</dt>
+                                    <dd class="col-sm-7">
+                                        {% if glosa.is_master_document %}
+                                            <span class="badge bg-primary">Documento Múltiple</span>
+                                        {% elif glosa.parent_document %}
+                                            <span class="badge bg-info">
+                                                Paciente {{ glosa.patient_section_number }}/{{ glosa.total_sections }}
+                                            </span>
+                                        {% else %}
+                                            <span class="badge bg-secondary">Documento Individual</span>
                                         {% endif %}
                                     </dd>
                                     
@@ -166,8 +243,75 @@
             </div>
         </div>
 
-        <!-- Extracted Data -->
-        {% if extracted_data and glosa.status == 'completed' %}
+        <!-- Child Documents (for master documents) -->
+        {% if glosa.is_master_document and child_documents %}
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0">
+                        <i class="fas fa-users"></i> 
+                        Pacientes en este Documento ({{ child_documents.count }})
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        {% for child_doc in child_documents %}
+                        <div class="col-lg-6 col-xl-4 mb-3">
+                            <div class="card border">
+                                <div class="card-body">
+                                    <div class="d-flex justify-content-between align-items-start">
+                                        <h6 class="card-title">Paciente {{ child_doc.patient_section_number }}</h6>
+                                        <span class="badge 
+                                            {% if child_doc.status == 'completed' %}bg-success
+                                            {% elif child_doc.status == 'processing' %}bg-warning
+                                            {% elif child_doc.status == 'error' %}bg-danger
+                                            {% else %}bg-secondary{% endif %}">
+                                            {{ child_doc.get_status_display }}
+                                        </span>
+                                    </div>
+                                    
+                                    {% if child_doc.extracted_data.patient_info.nombre %}
+                                        <p class="text-primary mb-1">
+                                            <strong>{{ child_doc.extracted_data.patient_info.nombre }}</strong>
+                                        </p>
+                                    {% endif %}
+                                    
+                                    {% if child_doc.extracted_data.financial_summary %}
+                                        <small class="text-muted">
+                                            Reclamado: ${{ child_doc.extracted_data.financial_summary.total_reclamado|floatformat:0|default:"0" }}
+                                        </small>
+                                    {% endif %}
+                                    
+                                    <div class="mt-2">
+                                        <a href="{% url 'glosa_detail' child_doc.id %}" 
+                                           class="btn btn-sm btn-outline-primary me-1">
+                                            <i class="fas fa-eye"></i> Ver
+                                        </a>
+                                        {% if child_doc.status == 'completed' %}
+                                            <a href="{% url 'download_file' child_doc.id 'csv' %}" 
+                                               class="btn btn-sm btn-outline-success">
+                                                <i class="fas fa-download"></i>
+                                            </a>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    
+                    {% if batch %}
+                        <div class="text-center mt-3">
+                            <a href="{% url 'batch_detail' batch.id %}" class="btn btn-primary">
+                                <i class="fas fa-layer-group"></i> Ver Batch Completo
+                            </a>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        {% endif %}
+
+        <!-- Extracted Data (only for non-master documents) -->
+        {% if extracted_data and glosa.status == 'completed' and not glosa.is_master_document %}
             
             <!-- Patient Information -->
             {% if patient_info %}
@@ -314,6 +458,7 @@
                                         <th>Valor Total</th>
                                         <th>Valor Objetado</th>
                                         <th>Estado</th>
+                                        <th>Observación</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -330,9 +475,6 @@
                                             </td>
                                             <td>
                                                 <div class="fw-bold">{{ proc.descripcion|truncatechars:50|default:"Sin descripción" }}</div>
-                                                {% if proc.observaciones %}
-                                                    <small class="text-muted">{{ proc.observaciones|truncatechars:100 }}</small>
-                                                {% endif %}
                                             </td>
                                             <td>{{ proc.cantidad|default:1 }}</td>
                                             <td class="text-end">${{ proc.valor_total|floatformat:0|default:"0" }}</td>
@@ -348,6 +490,15 @@
                                                     <span class="badge bg-warning">Objetado</span>
                                                 {% else %}
                                                     <span class="badge bg-success">Aceptado</span>
+                                                {% endif %}
+                                            </td>
+                                            <td>
+                                                {% if proc.observacion %}
+                                                    <small class="text-muted" title="{{ proc.observacion }}">
+                                                        {{ proc.observacion|truncatechars:50 }}
+                                                    </small>
+                                                {% else %}
+                                                    <span class="text-muted">-</span>
                                                 {% endif %}
                                             </td>
                                         </tr>
@@ -425,6 +576,20 @@
                 .then(response => response.json())
                 .then(data => {
                     if (data.status !== 'processing') {
+                        location.reload();
+                    }
+                })
+                .catch(error => console.error('Error:', error));
+        }, 5000);
+    {% endif %}
+    
+    // Auto-refresh para documentos maestros con batch en procesamiento
+    {% if glosa.is_master_document and batch and batch.batch_status in 'splitting,processing' %}
+        setInterval(function() {
+            fetch(`/api/glosas/{{ glosa.id }}/status/`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.batch_info && data.batch_info.batch_status !== '{{ batch.batch_status }}') {
                         location.reload();
                     }
                 })

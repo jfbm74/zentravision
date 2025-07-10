@@ -1,6 +1,4 @@
-<!-- ==========================================
-     apps/templates/glosa_list.html
-     ========================================== -->
+<!-- apps/templates/glosa_list.html ACTUALIZADO -->
 {% extends 'base.html' %}
 
 {% block title %}Mis Glosas - Zentravision{% endblock %}
@@ -11,31 +9,44 @@
         <!-- Header -->
         <div class="d-flex justify-content-between align-items-center mb-4">
             <h1><i class="fas fa-list text-primary"></i> Mis Glosas</h1>
-            <a href="{% url 'upload_glosa' %}" class="btn btn-primary">
-                <i class="fas fa-plus"></i> Nueva Glosa
-            </a>
+            <div>
+                <a href="{% url 'batch_list' %}" class="btn btn-info me-2">
+                    <i class="fas fa-layer-group"></i> Ver Batches
+                </a>
+                <a href="{% url 'upload_glosa' %}" class="btn btn-primary">
+                    <i class="fas fa-plus"></i> Nueva Glosa
+                </a>
+            </div>
         </div>
 
         <!-- Filters -->
         <div class="card mb-4">
             <div class="card-body">
                 <form method="get" class="row g-3">
-                    <div class="col-md-4">
+                    <div class="col-md-3">
                         <label for="search" class="form-label">Buscar</label>
                         <input type="text" class="form-control" id="search" name="search" 
                                value="{{ request.GET.search }}" placeholder="Nombre archivo o liquidación...">
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-md-2">
                         <label for="status" class="form-label">Estado</label>
                         <select class="form-select" id="status" name="status">
-                            <option value="">Todos los estados</option>
+                            <option value="">Todos</option>
                             <option value="pending" {% if request.GET.status == 'pending' %}selected{% endif %}>Pendiente</option>
                             <option value="processing" {% if request.GET.status == 'processing' %}selected{% endif %}>Procesando</option>
                             <option value="completed" {% if request.GET.status == 'completed' %}selected{% endif %}>Completado</option>
                             <option value="error" {% if request.GET.status == 'error' %}selected{% endif %}>Error</option>
                         </select>
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-md-2">
+                        <label for="type" class="form-label">Tipo</label>
+                        <select class="form-select" id="type" name="type">
+                            <option value="all" {% if request.GET.type == 'all' %}selected{% endif %}>Todos</option>
+                            <option value="single" {% if request.GET.type == 'single' %}selected{% endif %}>Individuales</option>
+                            <option value="multiple" {% if request.GET.type == 'multiple' %}selected{% endif %}>Múltiples</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
                         <label class="form-label">&nbsp;</label>
                         <div class="d-grid">
                             <button type="submit" class="btn btn-outline-primary">
@@ -43,7 +54,7 @@
                             </button>
                         </div>
                     </div>
-                    <div class="col-md-2">
+                    <div class="col-md-3">
                         <label class="form-label">&nbsp;</label>
                         <div class="d-grid">
                             <a href="{% url 'glosa_list' %}" class="btn btn-outline-secondary">
@@ -52,6 +63,42 @@
                         </div>
                     </div>
                 </form>
+            </div>
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="card bg-primary text-white">
+                    <div class="card-body text-center">
+                        <h4>{{ total_count }}</h4>
+                        <small>Total Documentos</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card bg-success text-white">
+                    <div class="card-body text-center">
+                        <h4>{{ glosas|length }}</h4>
+                        <small>En Esta Página</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card bg-info text-white">
+                    <div class="card-body text-center">
+                        <h4>{{ glosas|length|floatformat:0 }}</h4>
+                        <small>Individuales</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card bg-warning text-white">
+                    <div class="card-body text-center">
+                        <h4>0</h4>
+                        <small>Múltiples</small>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -64,10 +111,11 @@
                             <thead class="table-light">
                                 <tr>
                                     <th>Archivo</th>
+                                    <th>Tipo</th>
                                     <th>Estado</th>
+                                    <th>Pacientes</th>
                                     <th>Liquidación</th>
-                                    <th>Paciente</th>
-                                    <th>Valor Reclamado</th>
+                                    <th>Valor Total</th>
                                     <th>Fecha</th>
                                     <th>Acciones</th>
                                 </tr>
@@ -77,18 +125,48 @@
                                     <tr>
                                         <td>
                                             <div class="d-flex align-items-center">
-                                                <i class="fas fa-file-pdf text-danger me-2"></i>
+                                                {% if glosa.is_master_document %}
+                                                    <i class="fas fa-layer-group text-primary me-2"></i>
+                                                {% else %}
+                                                    <i class="fas fa-file-pdf text-danger me-2"></i>
+                                                {% endif %}
                                                 <div>
-                                                    <div class="fw-bold">{{ glosa.original_filename|truncatechars:30 }}</div>
+                                                    <div class="fw-bold">{{ glosa.original_filename|truncatechars:35 }}</div>
                                                     <small class="text-muted">{{ glosa.file_size|filesizeformat }}</small>
                                                 </div>
                                             </div>
+                                        </td>
+                                        <td>
+                                            {% if glosa.is_master_document %}
+                                                <span class="badge bg-primary">
+                                                    <i class="fas fa-layer-group"></i> Múltiple
+                                                </span>
+                                                {% if glosa.total_sections %}
+                                                    <br><small class="text-muted">{{ glosa.total_sections }} pacientes</small>
+                                                {% endif %}
+                                            {% else %}
+                                                <span class="badge bg-secondary">
+                                                    <i class="fas fa-user"></i> Individual
+                                                </span>
+                                            {% endif %}
                                         </td>
                                         <td>
                                             {% if glosa.status == 'completed' %}
                                                 <span class="badge bg-success">
                                                     <i class="fas fa-check"></i> Completado
                                                 </span>
+                                                {% if glosa.is_master_document %}
+                                                    {% with batch_status=glosa.get_child_status_summary %}
+                                                        {% if batch_status %}
+                                                            <br><small class="text-muted">
+                                                                {{ batch_status.completed }}/{{ batch_status.total }} OK
+                                                                {% if batch_status.error > 0 %}
+                                                                    | {{ batch_status.error }} errores
+                                                                {% endif %}
+                                                            </small>
+                                                        {% endif %}
+                                                    {% endwith %}
+                                                {% endif %}
                                             {% elif glosa.status == 'processing' %}
                                                 <span class="badge bg-warning">
                                                     <i class="fas fa-cog fa-spin"></i> Procesando
@@ -104,21 +182,32 @@
                                             {% endif %}
                                         </td>
                                         <td>
-                                            <code>{{ glosa.liquidacion_numero }}</code>
-                                        </td>
-                                        <td>
-                                            {% if glosa.extracted_data and glosa.extracted_data.header.victima_nombre %}
-                                                <div>{{ glosa.extracted_data.header.victima_nombre|truncatechars:25 }}</div>
+                                            {% if glosa.is_master_document %}
+                                                <div class="text-center">
+                                                    <strong class="text-primary">{{ glosa.total_sections|default:0 }}</strong>
+                                                    <br><small class="text-muted">pacientes</small>
+                                                </div>
+                                            {% elif glosa.extracted_data.patient_info.nombre %}
+                                                <div>{{ glosa.extracted_data.patient_info.nombre|truncatechars:25 }}</div>
                                                 <small class="text-muted">
-                                                    {{ glosa.extracted_data.header.victima_documento_tipo }} 
-                                                    {{ glosa.extracted_data.header.victima_documento_numero }}
+                                                    {{ glosa.extracted_data.patient_info.tipo_documento|default:"CC" }} 
+                                                    {{ glosa.extracted_data.patient_info.documento }}
                                                 </small>
                                             {% else %}
-                                                <span class="text-muted">N/A</span>
+                                                <span class="text-muted">1 paciente</span>
                                             {% endif %}
                                         </td>
+                                        <td>
+                                            <code>{{ glosa.liquidacion_numero }}</code>
+                                        </td>
                                         <td class="text-end">
-                                            {% if glosa.valor_reclamacion %}
+                                            {% if glosa.is_master_document %}
+                                                {% comment %} Sumar valores de documentos hijos {% endcomment %}
+                                                {% with total_batch_value=0 %}
+                                                    <strong class="text-primary">Múltiple</strong>
+                                                    <br><small class="text-muted">Ver batch</small>
+                                                {% endwith %}
+                                            {% elif glosa.valor_reclamacion %}
                                                 <strong>${{ glosa.valor_reclamacion|floatformat:0 }}</strong>
                                             {% else %}
                                                 <span class="text-muted">N/A</span>
@@ -135,13 +224,46 @@
                                                    title="Ver detalles">
                                                     <i class="fas fa-eye"></i>
                                                 </a>
-                                                {% if glosa.status == 'completed' %}
-                                                    <a href="{% url 'download_file' glosa.id 'json' %}" 
-                                                       class="btn btn-sm btn-outline-success" 
-                                                       title="Descargar JSON">
-                                                        <i class="fas fa-download"></i>
-                                                    </a>
+                                                
+                                                {% if glosa.is_master_document %}
+                                                    {% if glosa.get_processing_batch %}
+                                                        <a href="{% url 'batch_detail' glosa.get_processing_batch.id %}" 
+                                                           class="btn btn-sm btn-outline-info" 
+                                                           title="Ver batch">
+                                                            <i class="fas fa-layer-group"></i>
+                                                        </a>
+                                                    {% endif %}
+                                                    
+                                                    {% if glosa.status == 'completed' %}
+                                                        <div class="btn-group" role="group">
+                                                            <button type="button" 
+                                                                    class="btn btn-sm btn-outline-success dropdown-toggle" 
+                                                                    data-bs-toggle="dropdown" 
+                                                                    title="Descargar">
+                                                                <i class="fas fa-download"></i>
+                                                            </button>
+                                                            <ul class="dropdown-menu">
+                                                                <li><a class="dropdown-item" 
+                                                                       href="{% url 'download_batch_files' glosa.get_processing_batch.id 'consolidated_csv' %}">
+                                                                    <i class="fas fa-file-csv"></i> CSV Consolidado
+                                                                </a></li>
+                                                                <li><a class="dropdown-item" 
+                                                                       href="{% url 'download_batch_files' glosa.get_processing_batch.id 'zip_json' %}">
+                                                                    <i class="fas fa-file-archive"></i> ZIP JSONs
+                                                                </a></li>
+                                                            </ul>
+                                                        </div>
+                                                    {% endif %}
+                                                {% else %}
+                                                    {% if glosa.status == 'completed' %}
+                                                        <a href="{% url 'download_file' glosa.id 'json' %}" 
+                                                           class="btn btn-sm btn-outline-success" 
+                                                           title="Descargar JSON">
+                                                            <i class="fas fa-download"></i>
+                                                        </a>
+                                                    {% endif %}
                                                 {% endif %}
+                                                
                                                 {% if glosa.status in 'completed,error' %}
                                                     <a href="{% url 'reprocess_glosa' glosa.id %}" 
                                                        class="btn btn-sm btn-outline-warning" 
@@ -166,10 +288,10 @@
                     <ul class="pagination justify-content-center">
                         {% if page_obj.has_previous %}
                             <li class="page-item">
-                                <a class="page-link" href="?page=1{% if request.GET.search %}&search={{ request.GET.search }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status }}{% endif %}">Primera</a>
+                                <a class="page-link" href="?page=1{% if request.GET.search %}&search={{ request.GET.search }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status }}{% endif %}{% if request.GET.type %}&type={{ request.GET.type }}{% endif %}">Primera</a>
                             </li>
                             <li class="page-item">
-                                <a class="page-link" href="?page={{ page_obj.previous_page_number }}{% if request.GET.search %}&search={{ request.GET.search }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status }}{% endif %}">Anterior</a>
+                                <a class="page-link" href="?page={{ page_obj.previous_page_number }}{% if request.GET.search %}&search={{ request.GET.search }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status }}{% endif %}{% if request.GET.type %}&type={{ request.GET.type }}{% endif %}">Anterior</a>
                             </li>
                         {% endif %}
 
@@ -181,10 +303,10 @@
 
                         {% if page_obj.has_next %}
                             <li class="page-item">
-                                <a class="page-link" href="?page={{ page_obj.next_page_number }}{% if request.GET.search %}&search={{ request.GET.search }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status }}{% endif %}">Siguiente</a>
+                                <a class="page-link" href="?page={{ page_obj.next_page_number }}{% if request.GET.search %}&search={{ request.GET.search }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status }}{% endif %}{% if request.GET.type %}&type={{ request.GET.type }}{% endif %}">Siguiente</a>
                             </li>
                             <li class="page-item">
-                                <a class="page-link" href="?page={{ page_obj.paginator.num_pages }}{% if request.GET.search %}&search={{ request.GET.search }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status }}{% endif %}">Última</a>
+                                <a class="page-link" href="?page={{ page_obj.paginator.num_pages }}{% if request.GET.search %}&search={{ request.GET.search }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status }}{% endif %}{% if request.GET.type %}&type={{ request.GET.type }}{% endif %}">Última</a>
                             </li>
                         {% endif %}
                     </ul>
@@ -197,7 +319,7 @@
                 <div class="card-body text-center py-5">
                     <i class="fas fa-file-pdf fa-4x text-muted mb-4"></i>
                     <h4 class="text-muted">No se encontraron glosas</h4>
-                    {% if request.GET.search or request.GET.status %}
+                    {% if request.GET.search or request.GET.status or request.GET.type != 'all' %}
                         <p class="text-muted mb-4">No hay documentos que coincidan con los filtros aplicados.</p>
                         <a href="{% url 'glosa_list' %}" class="btn btn-outline-secondary me-2">
                             <i class="fas fa-times"></i> Limpiar Filtros
@@ -219,7 +341,7 @@
 <script>
     // Auto-refresh para documentos en procesamiento
     document.addEventListener('DOMContentLoaded', function() {
-        const processingRows = document.querySelectorAll('.badge.bg-warning');
+        const processingRows = document.querySelectorAll('.badge.bg-warning, .badge.bg-info');
         if (processingRows.length > 0) {
             setInterval(function() {
                 location.reload();
@@ -227,4 +349,4 @@
         }
     });
 </script>
-{% endblock %}
+{% endblock %>}
