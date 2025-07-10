@@ -10,7 +10,7 @@ import csv
 import io
 import traceback
 from apps.core.models import GlosaDocument, ProcessingLog
-from .medical_claim_extractor import MedicalClaimExtractor
+from .medical_claim_extractor_fixed import MedicalClaimExtractor
 
 @shared_task(bind=True)
 def process_glosa_document(self, glosa_id):
