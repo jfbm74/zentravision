@@ -8,7 +8,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.conf import settings
 import os
 import json
-from apps.extractor.medical_claim_extractor import MedicalClaimExtractor
+from apps.extractor.medical_claim_extractor_fixed import MedicalClaimExtractor
 
 class Command(BaseCommand):
     help = 'Prueba el extractor de glosas médicas con un archivo PDF'

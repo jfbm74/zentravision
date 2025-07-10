@@ -14,7 +14,7 @@ from .models import GlosaDocument, ProcessingLog
 from .forms import GlosaUploadForm
 
 # Importar el extractor mejorado
-from apps.extractor.medical_claim_extractor import MedicalClaimExtractor
+from apps.extractor.medical_claim_extractor_fixed import MedicalClaimExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +184,15 @@ def process_glosa_document_sync(glosa_id):
             return False
         
         # Inicializar el extractor mejorado
-        openai_api_key = getattr(settings, 'OPENAI_API_KEY', None)
+        openai_api_key = settings.OPENAI_API_KEY
+        extractor = MedicalClaimExtractor(openai_api_key=openai_api_key)
+
+
+        # Agregar log de debug
+        logger.info(f"OpenAI API Key disponible: {'Sí' if openai_api_key else 'No'}")
+        if openai_api_key:
+            logger.info(f"Primeros 10 caracteres de API key: {openai_api_key[:10]}...")
+        
         extractor = MedicalClaimExtractor(openai_api_key=openai_api_key)
         
         # Determinar estrategia de extracción

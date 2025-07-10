@@ -2,6 +2,11 @@ import os
 from pathlib import Path
 from decouple import config
 import dj_database_url
+from dotenv import load_dotenv 
+
+
+# Cargar variables de entorno desde .env
+load_dotenv()  
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -127,7 +132,13 @@ CELERY_TIMEZONE = TIME_ZONE
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 
 # OpenAI Configuration
-OPENAI_API_KEY = config('OPENAI_API_KEY')
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', config('OPENAI_API_KEY', default=''))
+
+# Agregar este print temporalmente para debug
+print(f"OPENAI_API_KEY en settings: {'Configurada' if OPENAI_API_KEY else 'NO configurada'}")
+if OPENAI_API_KEY:
+    print(f"Primeros 10 caracteres: {OPENAI_API_KEY[:10]}...")
+
 
 # File Upload Settings
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
