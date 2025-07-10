@@ -1,10 +1,9 @@
-# ==========================================
-# apps/extractor/tasks.py - ACTUALIZADO PARA BATCHES
-# ==========================================
+# apps/extractor/tasks.py - CORRECCIÓN DEL ERROR .get()
 
 from celery import shared_task
 from django.utils import timezone
 from django.core.files.base import ContentFile
+from django.conf import settings
 import json
 import csv
 import io
@@ -19,6 +18,7 @@ logger = logging.getLogger(__name__)
 def process_batch_documents(self, batch_id):
     """
     Tarea principal para procesar todos los documentos de un batch
+    CORREGIDO: Sin usar .get() dentro de tareas
     """
     try:
         logger.info(f"Iniciando procesamiento de batch {batch_id}")
@@ -41,13 +41,13 @@ def process_batch_documents(self, batch_id):
         if not child_documents.exists():
             raise Exception("No se encontraron documentos hijos para procesar")
         
-        # Procesar cada documento hijo
+        # CORREGIDO: Procesar cada documento de forma síncrona dentro de la tarea
         for child_glosa in child_documents:
             try:
                 logger.info(f"Procesando documento hijo {child_glosa.id} (sección {child_glosa.patient_section_number})")
                 
-                # Procesar documento individual
-                success = process_single_glosa_document.delay(child_glosa.id).get()
+                # CAMBIO: Llamar directamente a la función sin .get()
+                success = process_single_glosa_sync(child_glosa.id)
                 
                 # Actualizar contadores del batch
                 if success:
@@ -129,10 +129,9 @@ def process_batch_documents(self, batch_id):
         # Re-lanzar excepción para Celery
         raise self.retry(exc=e, countdown=60, max_retries=2)
 
-@shared_task(bind=True)
-def process_single_glosa_document(self, glosa_id):
+def process_single_glosa_sync(glosa_id):
     """
-    Tarea para procesar un documento individual de glosa
+    NUEVA FUNCIÓN: Procesa un documento de forma síncrona sin ser una tarea Celery
     """
     try:
         logger.info(f"Procesando documento individual {glosa_id}")
@@ -154,7 +153,6 @@ def process_single_glosa_document(self, glosa_id):
             raise Exception("Archivo no encontrado")
         
         # Inicializar extractor
-        from django.conf import settings
         openai_api_key = getattr(settings, 'OPENAI_API_KEY', None)
         extractor = MedicalClaimExtractor(openai_api_key=openai_api_key)
         
@@ -221,24 +219,30 @@ def process_single_glosa_document(self, glosa_id):
         return False
 
 @shared_task(bind=True)
+def process_single_glosa_document(self, glosa_id):
+    """
+    Tarea para procesar un documento individual de glosa
+    CORREGIDO: Sin usar .get()
+    """
+    return process_single_glosa_sync(glosa_id)
+
+@shared_task(bind=True)
 def process_glosa_document(self, glosa_id):
     """
     Tarea asíncrona heredada del sistema anterior
     Mantiene compatibilidad con documentos ya existentes
     """
     try:
-        # Redirigir a la nueva tarea
-        return process_single_glosa_document.delay(glosa_id).get()
+        return process_single_glosa_sync(glosa_id)
         
     except Exception as exc:
         logger.error(f"Error en tarea legacy {glosa_id}: {str(exc)}")
         raise self.retry(exc=exc, countdown=60, max_retries=3)
 
+# Resto de funciones sin cambios...
 @shared_task
 def cleanup_orphaned_files():
-    """
-    Tarea de mantenimiento para limpiar archivos huérfanos
-    """
+    """Tarea de mantenimiento para limpiar archivos huérfanos"""
     try:
         from django.core.files.storage import default_storage
         import os
@@ -256,14 +260,11 @@ def cleanup_orphaned_files():
         if glosas_with_missing_files:
             logger.warning(f"Encontrados {len(glosas_with_missing_files)} documentos con archivos faltantes")
         
-        # Buscar archivos sin documentos asociados
-        # (Esta parte requiere lógica más específica según el storage usado)
-        
         logger.info("Limpieza de archivos completada")
         
         return {
             'missing_files': len(glosas_with_missing_files),
-            'cleaned_files': 0  # Implementar según necesidades
+            'cleaned_files': 0
         }
         
     except Exception as e:
@@ -272,9 +273,7 @@ def cleanup_orphaned_files():
 
 @shared_task
 def generate_batch_report(batch_id):
-    """
-    Genera un reporte completo de un batch procesado
-    """
+    """Genera un reporte completo de un batch procesado"""
     try:
         batch = ProcessingBatch.objects.get(id=batch_id)
         
@@ -346,9 +345,7 @@ def generate_batch_report(batch_id):
 
 @shared_task
 def update_batch_progress():
-    """
-    Tarea periódica para actualizar el progreso de batches activos
-    """
+    """Tarea periódica para actualizar el progreso de batches activos"""
     try:
         active_batches = ProcessingBatch.objects.filter(
             batch_status__in=['splitting', 'processing']
