@@ -187,13 +187,10 @@ def process_glosa_document_sync(glosa_id):
         openai_api_key = settings.OPENAI_API_KEY
         extractor = MedicalClaimExtractor(openai_api_key=openai_api_key)
 
-
         # Agregar log de debug
         logger.info(f"OpenAI API Key disponible: {'Sí' if openai_api_key else 'No'}")
         if openai_api_key:
             logger.info(f"Primeros 10 caracteres de API key: {openai_api_key[:10]}...")
-        
-        extractor = MedicalClaimExtractor(openai_api_key=openai_api_key)
         
         # Determinar estrategia de extracción
         strategy = glosa.strategy if hasattr(glosa, 'strategy') else 'hybrid'
@@ -415,7 +412,7 @@ def reprocess_glosa(request, glosa_id):
 
 @login_required
 def download_file(request, glosa_id, file_type):
-    """Descargar archivos relacionados con la glosa"""
+    """Descargar archivos relacionados con la glosa - MEJORADO"""
     glosa = get_object_or_404(GlosaDocument, id=glosa_id, user=request.user)
     
     if file_type == 'json':
@@ -428,37 +425,26 @@ def download_file(request, glosa_id, file_type):
         return response
     
     elif file_type == 'csv':
-        # Generar CSV de procedimientos si existen
-        import csv
-        from io import StringIO
-        
-        output = StringIO()
-        
-        procedures = glosa.extracted_data.get('procedures', [])
-        if procedures:
-            writer = csv.writer(output)
-            
-            # Headers
-            writer.writerow([
-                'Código', 'Descripción', 'Cantidad', 'Valor Unitario', 
-                'Valor Total', 'Valor Objetado', 'Estado'
-            ])
-            
-            # Data
-            for proc in procedures:
-                writer.writerow([
-                    proc.get('codigo', ''),
-                    proc.get('descripcion', ''),
-                    proc.get('cantidad', 0),
-                    proc.get('valor_unitario', 0),
-                    proc.get('valor_total', 0),
-                    proc.get('valor_objetado', 0),
-                    proc.get('estado', 'pendiente')
-                ])
-        
-        response = HttpResponse(output.getvalue(), content_type='text/csv; charset=utf-8')
-        response['Content-Disposition'] = f'attachment; filename="{glosa.original_filename}_procedures.csv"'
-        return response
+        # Generar CSV en formato Excel IPS - NUEVO
+        if glosa.extracted_data:
+            try:
+                # Crear instancia del extractor para usar el método de generación de CSV
+                extractor = MedicalClaimExtractor()
+                csv_content = extractor.generate_excel_format_csv(glosa.extracted_data)
+                
+                response = HttpResponse(csv_content, content_type='text/csv; charset=utf-8')
+                response['Content-Disposition'] = f'attachment; filename="{glosa.original_filename}_IPS_format.csv"'
+                return response
+            except Exception as e:
+                logger.error(f"Error generando CSV formato Excel: {e}")
+                # Fallback al CSV original si hay error
+                return _generate_legacy_csv(glosa)
+        else:
+            return _generate_empty_csv(glosa)
+    
+    elif file_type == 'csv_legacy':
+        # Generar CSV en formato anterior (para compatibilidad)
+        return _generate_legacy_csv(glosa)
     
     elif file_type == 'original':
         # Descargar archivo original
@@ -469,6 +455,65 @@ def download_file(request, glosa_id, file_type):
                 return response
     
     raise Http404("Archivo no encontrado")
+
+def _generate_legacy_csv(glosa):
+    """Genera CSV en formato anterior para compatibilidad"""
+    import csv
+    from io import StringIO
+    
+    output = StringIO()
+    procedures = glosa.extracted_data.get('procedures', [])
+    
+    if procedures:
+        writer = csv.writer(output)
+        
+        # Headers del formato anterior
+        writer.writerow([
+            'Código', 'Descripción', 'Cantidad', 'Valor Unitario', 
+            'Valor Total', 'Valor Objetado', 'Estado'
+        ])
+        
+        # Data
+        for proc in procedures:
+            writer.writerow([
+                proc.get('codigo', ''),
+                proc.get('descripcion', ''),
+                proc.get('cantidad', 0),
+                proc.get('valor_unitario', 0),
+                proc.get('valor_total', 0),
+                proc.get('valor_objetado', 0),
+                proc.get('estado', 'pendiente')
+            ])
+    
+    response = HttpResponse(output.getvalue(), content_type='text/csv; charset=utf-8')
+    response['Content-Disposition'] = f'attachment; filename="{glosa.original_filename}_procedures_legacy.csv"'
+    return response
+
+def _generate_empty_csv(glosa):
+    """Genera CSV vacío con headers correctos"""
+    import csv
+    from io import StringIO
+    
+    output = StringIO()
+    writer = csv.writer(output)
+    
+    # Headers del formato Excel IPS + descripción del procedimiento
+    headers = [
+        'NOMBRE PACIENTE', '# ID', 'FACTURA', 'FECHA FACTURA', 'VALOR TOTAL GLOSA',
+        'CÓDIGO ITEM', 'DETALLE DE GLOSA', 'VALOR ITEM', 'VALOR ACEPTADO', 
+        'VALOR NO ACEPTADO', 'RESPUESTA IPS', 'CLASIFICACIÓN GLOSA', 
+        'FECHA RECIBIDO GLOSA', 'DIAS GLOSA', 'FECHA RADICADO RESPUESTA', 
+        'DIAS RESPUESTA', 'CÓDIGO RADICACIÓN', 'FUNCIONARIO', 'Entidad',
+        'DESCRIPCIÓN PROCEDIMIENTO'
+    ]
+    writer.writerow(headers)
+    
+    # Fila vacía
+    writer.writerow([''] * len(headers))
+    
+    response = HttpResponse(output.getvalue(), content_type='text/csv; charset=utf-8')
+    response['Content-Disposition'] = f'attachment; filename="{glosa.original_filename}_IPS_format_empty.csv"'
+    return response
 
 # API Views
 @login_required
