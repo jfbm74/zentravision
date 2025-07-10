@@ -10,24 +10,18 @@ logger = logging.getLogger(__name__)
 
 class MedicalClaimExtractor:
     """
-    Extractor mejorado específicamente para glosas SOAT colombianas
+    Extractor optimizado específicamente para glosas SOAT colombianas
+    Versión consolidada que elimina código redundante y usa solo métodos que funcionan
     """
     
-    def __init__(self, openai_api_key: Optional[str] = None):
+    def __init__(self, openai_api_key=None):
         self.openai_api_key = openai_api_key
-        self.extraction_strategies = {
-            'hybrid': self._extract_hybrid,
-            'ai_only': self._extract_ai_only,
-            'ocr_only': self._extract_ocr_only
-        }
-        
-        # Configurar patrones específicos para SOAT
         self._setup_soat_patterns()
-    
+
     def _setup_soat_patterns(self):
         """Configura patrones específicos para documentos SOAT"""
         
-        # Patrones para información del paciente en SOAT
+        # Patrones para información del paciente
         self.patient_patterns = {
             'nombre': [
                 r'Víctima\s*:\s*[A-Z]{1,3}\s*-\s*\d+\s*-\s*([A-ZÁÉÍÓÚÑ\s]+?)(?:\n|\r|Número)',
@@ -47,12 +41,12 @@ class MedicalClaimExtractor:
             ]
         }
         
-        # Patrones para información de póliza SOAT
+        # Patrones para información de póliza
         self.policy_patterns = {
             'numero_liquidacion': [
                 r'Liquidación\s+de\s+siniestro\s+No\.\s*([A-Z0-9\-]+)',
-                r'GNS-LIQ-(\d+)',
                 r'LIQ-(\d+)',
+                r'GNS-LIQ-(\d+)',
             ],
             'poliza': [
                 r'Póliza\s*:\s*(\d+)',
@@ -76,17 +70,14 @@ class MedicalClaimExtractor:
             ]
         }
         
-        # Patrones para diagnósticos SOAT
+        # Patrones para diagnósticos
         self.diagnostic_patterns = [
             r'DX\s*:\s*([A-Z]\d{2,3})',
             r'DIAGNOSTICO\s*:\s*([A-Z]\d{2,3})',
             r'CIE\s*:\s*([A-Z]\d{2,3})',
         ]
         
-        # Patrones específicos para procedimientos SOAT (tabla estructurada)
-        self.procedure_table_pattern = r'(\d{1,8}(?:-\d{1,2})?)\s+([A-ZÁÉÍÓÚÑ\s\w\/\#]+?)\s+(\d+(?:\.\d+)?)\s+\$?([\d,\.]+)\s+\$?([\d,\.]+)\s+\$?([\d,\.]+)(?:\s+(.+?))?(?=\n\d|\nTotal|\n[A-Z]{2,}|\Z)'
-        
-        # Patrones para valores monetarios finales
+        # Patrones financieros
         self.financial_totals_patterns = {
             'valor_reclamacion': [
                 r'Valor\s+de\s+Reclamación\s*:\s*\$?([\d,\.]+)',
@@ -102,6 +93,7 @@ class MedicalClaimExtractor:
                 r'Valor\s+pagado\s*:\s*\$?([\d,\.]+)',
                 r'VALOR\s+PAGADO\s*:\s*\$?([\d,\.]+)',
                 r'Total\s+pagado\s*:\s*\$?([\d,\.]+)',
+                r'Valor\s+Pagado\s*:\s*\$?([\d,\.]+)',
             ],
             'valor_nota_credito': [
                 r'Valor\s+Nota\s+Crédito\s*:\s*\$?([\d,\.]+)',
@@ -119,9 +111,16 @@ class MedicalClaimExtractor:
             r'([A-ZÁÉÍÓÚÑ\s\.]+?)\s+IPS\s+SAS',
             r'([A-ZÁÉÍÓÚÑ\s\.]+?)\s+Departamento\s+de\s+cartera',
         ]
-    
+
+        # Patrón principal optimizado para procedimientos
+        self.main_procedure_pattern = r'(\d{5}|00000)\s+([A-ZÁÉÍÓÚÑ\s\w\/\#\,\.\-\(\)\%]+?)\s+(\d+(?:\.\d+)?)\s+\$?([\d,\.]+)\s+\$?([\d,\.]+)\s+\$?([\d,\.]+)(?:\s+(.+?))?(?=\n\d{5}|\n00000|\nTotal|\nValor de|\Z)'
+
+    # ============================================================================
+    # MÉTODO PRINCIPAL DE EXTRACCIÓN
+    # ============================================================================
+
     def extract_from_pdf(self, pdf_path: str, strategy: str = 'hybrid') -> Dict[str, Any]:
-        """Extrae información estructurada de un PDF de glosa SOAT"""
+        """Método principal de extracción"""
         try:
             logger.info(f"Iniciando extracción SOAT con estrategia: {strategy}")
             
@@ -132,13 +131,13 @@ class MedicalClaimExtractor:
                 logger.warning("No se pudo extraer texto del PDF")
                 return self._get_empty_result()
             
-            # Para SOAT siempre usar OCR mejorado
+            # Usar extracción optimizada
             result = self._extract_soat_data(text_content)
             
-            # Si hay API key de OpenAI y la estrategia lo permite, mejorar con IA
+            # Mejorar con IA si está disponible
             if self.openai_api_key and strategy in ['hybrid', 'ai_only']:
                 try:
-                    ai_result = self._extract_with_openai_enabled(text_content)
+                    ai_result = self._extract_with_openai(text_content)
                     result = self._merge_results(result, ai_result)
                 except Exception as e:
                     logger.warning(f"Error con OpenAI, usando solo OCR: {e}")
@@ -153,58 +152,34 @@ class MedicalClaimExtractor:
                 'document_type': 'SOAT'
             }
             
-            logger.info("Extracción SOAT completada exitosamente")
+            logger.info(f"Extracción completada: {len(result.get('procedures', []))} procedimientos")
             return result
             
         except Exception as e:
             logger.error(f"Error en extracción: {str(e)}")
             return self._get_error_result(str(e))
-    
-    def _extract_text_from_pdf(self, pdf_path: str) -> str:
-        """Extrae texto de un PDF usando PyMuPDF"""
-        try:
-            doc = fitz.open(pdf_path)
-            text = ""
-            
-            for page_num in range(len(doc)):
-                page = doc.load_page(page_num)
-                page_text = page.get_text()
-                text += page_text + "\n"
-            
-            doc.close()
-            return text
-            
-        except Exception as e:
-            logger.error(f"Error extrayendo texto del PDF: {str(e)}")
-            return ""
-    
+
+    # ============================================================================
+    # EXTRACCIÓN DE DATOS PRINCIPALES
+    # ============================================================================
+
     def _extract_soat_data(self, text: str) -> Dict[str, Any]:
-        """Extracción específica para documentos SOAT"""
+        """Extracción principal de datos SOAT"""
         try:
             result = self._get_empty_result()
             
-            # Limpiar texto
-            cleaned_text = self._clean_text(text)
+            # ✅ FIX: NO limpiar texto para procedimientos, usar texto original
+            # cleaned_text = self._clean_text(text)  # ❌ ESTO CAUSABA EL PROBLEMA
             
-            # Extraer información del paciente
-            result['patient_info'] = self._extract_soat_patient_info(cleaned_text)
+            # Extraer cada sección con el texto apropiado
+            result['patient_info'] = self._extract_patient_info(text)
+            result['policy_info'] = self._extract_policy_info(text)
+            result['procedures'] = self._extract_procedures(text)      # ✅ FIX: Usar texto original
+            result['financial_summary'] = self._extract_financial_summary(text)
+            result['diagnostics'] = self._extract_diagnostics(text)
+            result['ips_info'] = self._extract_ips_info(text)
             
-            # Extraer información de la póliza
-            result['policy_info'] = self._extract_soat_policy_info(cleaned_text)
-            
-            # Extraer procedimientos de la tabla
-            result['procedures'] = self._extract_soat_procedures_table(cleaned_text)
-            
-            # Extraer resumen financiero
-            result['financial_summary'] = self._extract_soat_financial_summary(cleaned_text)
-            
-            # Extraer diagnósticos
-            result['diagnostics'] = self._extract_soat_diagnostics(cleaned_text)
-            
-            # Extraer información de la IPS
-            result['ips_info'] = self._extract_soat_ips_info(cleaned_text)
-            
-            # Calcular estadísticas adicionales
+            # Calcular estadísticas
             result['extraction_details'] = self._calculate_extraction_stats(result)
             
             return result
@@ -212,17 +187,169 @@ class MedicalClaimExtractor:
         except Exception as e:
             logger.error(f"Error en extracción SOAT: {str(e)}")
             return self._get_empty_result()
-    
-    def _extract_soat_patient_info(self, text: str) -> Dict[str, Any]:
-        """Extrae información del paciente específica para SOAT"""
+
+
+    # ============================================================================
+    # EXTRACCIÓN DE PROCEDIMIENTOS (MÉTODO PRINCIPAL OPTIMIZADO)
+    # ============================================================================
+
+    def _extract_procedures(self, text: str) -> List[Dict[str, Any]]:
+        """
+        MÉTODO PRINCIPAL OPTIMIZADO para extracción de procedimientos
+        Consolida todos los métodos que funcionan en uno solo
+        """
+        procedures = []
+        
+        logger.info("Iniciando extracción optimizada de procedimientos")
+        
+        # Usar patrón principal optimizado
+        matches = re.finditer(self.main_procedure_pattern, text, re.IGNORECASE | re.MULTILINE | re.DOTALL)
+        
+        for match in matches:
+            try:
+                # Extraer datos básicos
+                codigo = match.group(1).strip()
+                descripcion_raw = match.group(2).strip()
+                cantidad = float(match.group(3).strip())
+                valor_total = self._parse_money_value(match.group(4))
+                valor_pagado = self._parse_money_value(match.group(5))
+                valor_objetado = self._parse_money_value(match.group(6))
+                observacion_raw = match.group(7).strip() if match.group(7) else ""
+                
+                # Limpiar y validar
+                descripcion = self._clean_description(descripcion_raw)
+                observacion = self._clean_observation(observacion_raw)
+                
+                # Validar procedimiento
+                if self._is_valid_procedure(codigo, descripcion, valor_total):
+                    procedure = {
+                        'codigo': codigo,
+                        'descripcion': descripcion,
+                        'cantidad': int(cantidad),
+                        'valor_unitario': valor_total / cantidad if cantidad > 0 else 0,
+                        'valor_total': valor_total,
+                        'valor_pagado': valor_pagado,
+                        'valor_objetado': valor_objetado,
+                        'observacion': observacion,
+                        'estado': 'objetado' if valor_objetado > 0 else 'aceptado'
+                    }
+                    
+                    procedures.append(procedure)
+                    logger.debug(f"Procedimiento extraído: {codigo} - {descripcion[:50]}...")
+                else:
+                    logger.debug(f"Procedimiento descartado: {codigo} - {descripcion[:30]}...")
+                    
+            except Exception as e:
+                logger.error(f"Error procesando procedimiento: {e}")
+                continue
+        
+        logger.info(f"Total procedimientos extraídos: {len(procedures)}")
+        return procedures
+
+    def _is_valid_procedure(self, codigo: str, descripcion: str, valor_total: float) -> bool:
+        """Validación optimizada de procedimientos"""
+        
+        # 1. Validar código
+        if not re.match(r'^(\d{5}|00000)$', codigo):
+            return False
+        
+        # 2. Validar descripción básica
+        if not descripcion or len(descripcion.strip()) < 3:
+            return False
+        
+        # 3. Patrones que NO deben estar en descripción (consolidado)
+        invalid_patterns = [
+            'Pagina', 'LIQ-', 'Liquidación de siniestro', 'Fecha de Pago',
+            'Víctima :', 'Número de reclamación', 'Póliza :', 'DX :',
+            'CORRESPONDE ESTA ESPECIALIDAD'
+        ]
+        
+        for pattern in invalid_patterns:
+            if pattern in descripcion:
+                return False
+        
+        # 4. Validar valor monetario
+        if valor_total <= 0 or valor_total > 10000000:
+            return False
+        
+        # 5. Validaciones adicionales
+        if descripcion.strip().isdigit():
+            return False
+        
+        desc_clean = re.sub(r'[^\w\s]', '', descripcion).strip()
+        if len(desc_clean) < 5:
+            return False
+        
+        return True
+
+    def _clean_description(self, description: str) -> str:
+        """Limpieza optimizada de descripción"""
+        if not description:
+            return ""
+        
+        # Remover patrones problemáticos
+        description = re.sub(r'^\d+\s*', '', description)  # Números al inicio
+        description = re.sub(r'\s+\d+\s*$', '', description)  # Números al final
+        description = re.sub(r'\$[\d,\.]+', '', description)  # Valores monetarios
+        description = re.sub(r'\d{4}\s+>>', '', description)  # Códigos de observación
+        
+        # Remover texto problemático
+        stop_words = ['LIQ-', 'Pagina', 'Liquidación', 'Fecha de', 'Víctima', 'Número de']
+        for stop_word in stop_words:
+            if stop_word in description:
+                pos = description.find(stop_word)
+                description = description[:pos].strip()
+                break
+        
+        # Normalizar espacios
+        description = re.sub(r'\s+', ' ', description.strip())
+        
+        # Capitalizar apropiadamente
+        if description:
+            words = description.split()
+            cleaned_words = []
+            for word in words:
+                if len(word) <= 3 and word.isupper():  # Mantener acrónimos
+                    cleaned_words.append(word)
+                else:
+                    cleaned_words.append(word.title())
+            description = ' '.join(cleaned_words)
+        
+        return description
+
+    def _clean_observation(self, observation: str) -> str:
+        """Limpieza optimizada de observación"""
+        if not observation:
+            return ""
+        
+        # Extraer parte relevante
+        obs_pattern = r'(\d{4})\s+>>\s+(.+?)(?=\n\d{4}\s+>>|\n\d{5}|\n00000|\nTotal|\Z)'
+        match = re.search(obs_pattern, observation, re.DOTALL)
+        
+        if match:
+            observation = match.group(2).strip()
+        
+        # Normalizar y truncar
+        observation = re.sub(r'\s+', ' ', observation.strip())
+        
+        if len(observation) > 300:
+            observation = observation[:300] + "..."
+        
+        return observation
+
+    # ============================================================================
+    # EXTRACCIÓN DE OTRAS SECCIONES
+    # ============================================================================
+
+    def _extract_patient_info(self, text: str) -> Dict[str, Any]:
+        """Extrae información del paciente"""
         patient_info = {}
         
-        # Extraer nombre del paciente
+        # Extraer nombre
         for pattern in self.patient_patterns['nombre']:
             match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
             if match:
                 nombre = match.group(1).strip()
-                # Limpiar el nombre
                 nombre = re.sub(r'\s+', ' ', nombre)
                 patient_info['nombre'] = nombre.title()
                 break
@@ -231,14 +358,14 @@ class MedicalClaimExtractor:
         for pattern in self.patient_patterns['documento']:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
-                if len(match.groups()) == 2:  # Tipo y número
+                if len(match.groups()) == 2:
                     patient_info['tipo_documento'] = match.group(1).strip()
                     patient_info['documento'] = match.group(2).strip()
-                else:  # Solo número
+                else:
                     patient_info['documento'] = match.group(1).strip()
                 break
         
-        # Extraer tipo de documento si no se extrajo antes
+        # Extraer tipo de documento si falta
         if 'tipo_documento' not in patient_info:
             for pattern in self.patient_patterns['tipo_documento']:
                 match = re.search(pattern, text, re.IGNORECASE)
@@ -247,9 +374,9 @@ class MedicalClaimExtractor:
                     break
         
         return patient_info
-    
-    def _extract_soat_policy_info(self, text: str) -> Dict[str, Any]:
-        """Extrae información de la póliza específica para SOAT"""
+
+    def _extract_policy_info(self, text: str) -> Dict[str, Any]:
+        """Extrae información de póliza"""
         policy_info = {}
         
         for key, patterns in self.policy_patterns.items():
@@ -260,111 +387,9 @@ class MedicalClaimExtractor:
                     break
         
         return policy_info
-    
-    def _extract_soat_procedures_table(self, text: str) -> List[Dict[str, Any]]:
-        """Extrae procedimientos de la tabla estructurada SOAT"""
-        procedures = []
-        
-        # Buscar la tabla de procedimientos
-        matches = re.finditer(self.procedure_table_pattern, text, re.IGNORECASE | re.MULTILINE | re.DOTALL)
-        
-        for match in matches:
-            try:
-                codigo = match.group(1).strip()
-                descripcion = match.group(2).strip()
-                cantidad = float(match.group(3).strip())
-                valor_total = self._parse_money_value(match.group(4))
-                valor_pagado = self._parse_money_value(match.group(5))
-                valor_objetado = self._parse_money_value(match.group(6))
-                observacion = match.group(7).strip() if match.group(7) else ""
-                
-                # Calcular valor unitario
-                valor_unitario = valor_total / cantidad if cantidad > 0 else 0
-                
-                procedure = {
-                    'codigo': codigo,
-                    'descripcion': descripcion,
-                    'cantidad': int(cantidad),
-                    'valor_unitario': valor_unitario,
-                    'valor_total': valor_total,
-                    'valor_pagado': valor_pagado,
-                    'valor_objetado': valor_objetado,
-                    'observacion': observacion,
-                    'estado': 'objetado' if valor_objetado > 0 else 'aceptado'
-                }
-                
-                procedures.append(procedure)
-                
-            except (ValueError, IndexError) as e:
-                logger.warning(f"Error procesando procedimiento: {e}")
-                continue
-        
-        # Si no encontró procedimientos con el patrón principal, intentar patrón alternativo
-        if not procedures:
-            procedures = self._extract_procedures_alternative_pattern(text)
-        
-        return procedures
-    
-    def _extract_procedures_alternative_pattern(self, text: str) -> List[Dict[str, Any]]:
-        """Patrón alternativo para extraer procedimientos"""
-        procedures = []
-        
-        # Patrón más simple línea por línea
-        lines = text.split('\n')
-        in_table = False
-        
-        for line in lines:
-            line = line.strip()
-            
-            # Detectar inicio de tabla
-            if 'Código' in line and 'Descripción' in line and 'Valor total' in line:
-                in_table = True
-                continue
-            
-            # Detectar fin de tabla
-            if 'Total' in line and '$' in line and in_table:
-                break
-            
-            if in_table and line:
-                # Intentar extraer datos de la línea
-                parts = re.split(r'\s+', line)
-                if len(parts) >= 6:
-                    try:
-                        codigo = parts[0]
-                        # Buscar valores monetarios en la línea
-                        money_values = re.findall(r'\$?([\d,\.]+)', line)
-                        
-                        if len(money_values) >= 3:
-                            valor_total = self._parse_money_value(money_values[-3])
-                            valor_pagado = self._parse_money_value(money_values[-2])
-                            valor_objetado = self._parse_money_value(money_values[-1])
-                            
-                            # Extraer descripción (entre código y primer valor)
-                            desc_start = line.find(codigo) + len(codigo)
-                            desc_end = line.find(money_values[0])
-                            descripcion = line[desc_start:desc_end].strip()
-                            
-                            procedure = {
-                                'codigo': codigo,
-                                'descripcion': descripcion,
-                                'cantidad': 1,
-                                'valor_unitario': valor_total,
-                                'valor_total': valor_total,
-                                'valor_pagado': valor_pagado,
-                                'valor_objetado': valor_objetado,
-                                'observacion': "",
-                                'estado': 'objetado' if valor_objetado > 0 else 'aceptado'
-                            }
-                            
-                            procedures.append(procedure)
-                    
-                    except (ValueError, IndexError):
-                        continue
-        
-        return procedures
-    
-    def _extract_soat_financial_summary(self, text: str) -> Dict[str, Any]:
-        """Extrae resumen financiero específico para SOAT"""
+
+    def _extract_financial_summary(self, text: str) -> Dict[str, Any]:
+        """Extrae resumen financiero"""
         financial = {}
         
         for key, patterns in self.financial_totals_patterns.items():
@@ -383,7 +408,7 @@ class MedicalClaimExtractor:
             else:
                 financial['porcentaje_objetado'] = 0.0
         
-        # Mapear a nombres estándar
+        # Mapear nombres estándar
         if 'valor_reclamacion' in financial:
             financial['total_reclamado'] = financial['valor_reclamacion']
         if 'valor_objetado' in financial:
@@ -392,9 +417,9 @@ class MedicalClaimExtractor:
             financial['total_pagado'] = financial['valor_pagado']
         
         return financial
-    
-    def _extract_soat_diagnostics(self, text: str) -> List[Dict[str, Any]]:
-        """Extrae diagnósticos específicos para SOAT"""
+
+    def _extract_diagnostics(self, text: str) -> List[Dict[str, Any]]:
+        """Extrae diagnósticos"""
         diagnostics = []
         
         for pattern in self.diagnostic_patterns:
@@ -412,16 +437,15 @@ class MedicalClaimExtractor:
                 diagnostics.append(diagnostic)
         
         return diagnostics
-    
-    def _extract_soat_ips_info(self, text: str) -> Dict[str, Any]:
-        """Extrae información de la IPS específica para SOAT"""
+
+    def _extract_ips_info(self, text: str) -> Dict[str, Any]:
+        """Extrae información de IPS"""
         ips_info = {}
         
         for pattern in self.ips_patterns:
             match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
             if match:
                 nombre = match.group(1).strip()
-                # Limpiar nombre de la IPS
                 nombre = re.sub(r'\s+', ' ', nombre)
                 ips_info['nombre'] = nombre.title()
                 break
@@ -433,9 +457,63 @@ class MedicalClaimExtractor:
             ips_info['nit'] = match.group(1).strip()
         
         return ips_info
-    
+
+    # ============================================================================
+    # UTILIDADES Y HELPERS
+    # ============================================================================
+
+    def _extract_text_from_pdf(self, pdf_path: str) -> str:
+        """Extrae texto de PDF usando PyMuPDF"""
+        try:
+            doc = fitz.open(pdf_path)
+            text = ""
+            
+            for page_num in range(len(doc)):
+                page = doc.load_page(page_num)
+                page_text = page.get_text()
+                text += page_text + "\n"
+            
+            doc.close()
+            return text
+            
+        except Exception as e:
+            logger.error(f"Error extrayendo texto del PDF: {str(e)}")
+            return ""
+
+    def _parse_money_value(self, value_str: str) -> float:
+        """Convierte string monetario a float"""
+        if not value_str:
+            return 0.0
+        
+        try:
+            clean_value = re.sub(r'[\$\s]', '', str(value_str))
+            
+            if ',' in clean_value and clean_value.count(',') == 1:
+                parts = clean_value.split(',')
+                if len(parts[1]) <= 2:
+                    clean_value = clean_value.replace(',', '.')
+                else:
+                    clean_value = clean_value.replace(',', '')
+            else:
+                clean_value = clean_value.replace(',', '')
+            
+            return float(clean_value)
+        except (ValueError, TypeError):
+            return 0.0
+
+    def _clean_text(self, text: str) -> str:
+        """Limpia y normaliza texto"""
+        if not text:
+            return ""
+        
+        text = re.sub(r'\r\n', '\n', text)
+        text = re.sub(r'\r', '\n', text)
+        text = re.sub(r'\s+', ' ', text)
+        
+        return text.strip()
+
     def _get_cie10_description(self, codigo: str) -> str:
-        """Obtiene descripción básica de códigos CIE-10 comunes"""
+        """Obtiene descripción de códigos CIE-10"""
         cie10_descriptions = {
             'S836': 'Esguince y distensión de otras partes y las no especificadas de la rodilla',
             'S83': 'Luxación, esguince y distensión de articulaciones y ligamentos de la rodilla',
@@ -444,53 +522,14 @@ class MedicalClaimExtractor:
             'S82': 'Fractura de la pierna, incluyendo el tobillo',
         }
         
-        # Buscar coincidencia exacta o parcial
         for key, desc in cie10_descriptions.items():
             if codigo.startswith(key):
                 return desc
         
         return ""
-    
-    def _parse_money_value(self, value_str: str) -> float:
-        """Convierte string de valor monetario a float"""
-        if not value_str:
-            return 0.0
-        
-        try:
-            # Remover símbolos y espacios
-            clean_value = re.sub(r'[\$\s]', '', str(value_str))
-            
-            # Reemplazar comas por puntos para decimales
-            if ',' in clean_value and clean_value.count(',') == 1:
-                # Si hay solo una coma, probablemente es decimal
-                parts = clean_value.split(',')
-                if len(parts[1]) <= 2:  # Máximo 2 decimales
-                    clean_value = clean_value.replace(',', '.')
-                else:
-                    # Es separador de miles
-                    clean_value = clean_value.replace(',', '')
-            else:
-                # Múltiples comas o ninguna, eliminar todas
-                clean_value = clean_value.replace(',', '')
-            
-            return float(clean_value)
-        except (ValueError, TypeError):
-            return 0.0
-    
-    def _clean_text(self, text: str) -> str:
-        """Limpia y normaliza el texto"""
-        if not text:
-            return ""
-        
-        # Normalizar espacios y saltos de línea
-        text = re.sub(r'\r\n', '\n', text)
-        text = re.sub(r'\r', '\n', text)
-        text = re.sub(r'\s+', ' ', text)
-        
-        return text.strip()
-    
+
     def _calculate_extraction_stats(self, result: Dict[str, Any]) -> Dict[str, Any]:
-        """Calcula estadísticas de la extracción"""
+        """Calcula estadísticas de extracción"""
         procedures = result.get('procedures', [])
         financial = result.get('financial_summary', {})
         
@@ -509,34 +548,23 @@ class MedicalClaimExtractor:
             })
         
         return stats
-    
+
     def _count_extracted_fields(self, result: Dict[str, Any]) -> int:
-        """Cuenta campos exitosamente extraídos"""
+        """Cuenta campos extraídos exitosamente"""
         count = 0
         
-        # Contar campos de paciente
-        patient_info = result.get('patient_info', {})
-        count += len([v for v in patient_info.values() if v])
-        
-        # Contar campos de póliza
-        policy_info = result.get('policy_info', {})
-        count += len([v for v in policy_info.values() if v])
-        
-        # Contar campos financieros
-        financial = result.get('financial_summary', {})
-        count += len([v for v in financial.values() if v])
-        
-        # Contar procedimientos y diagnósticos
+        count += len([v for v in result.get('patient_info', {}).values() if v])
+        count += len([v for v in result.get('policy_info', {}).values() if v])
+        count += len([v for v in result.get('financial_summary', {}).values() if v])
         count += len(result.get('procedures', []))
         count += len(result.get('diagnostics', []))
         
         return count
-    
+
     def _calculate_extraction_quality(self, result: Dict[str, Any]) -> str:
-        """Calcula la calidad de la extracción"""
+        """Calcula calidad de extracción"""
         total_fields = self._count_extracted_fields(result)
         
-        # Para SOAT, esperamos al menos: paciente (3), póliza (5), procedimientos (5+), diagnósticos (1), IPS (1)
         if total_fields >= 20:
             return 'excelente'
         elif total_fields >= 15:
@@ -545,22 +573,20 @@ class MedicalClaimExtractor:
             return 'regular'
         else:
             return 'baja'
-    
-    def _extract_with_openai_enabled(self, text: str) -> Dict[str, Any]:
-        """Extrae información usando OpenAI GPT - Versión simplificada sin proxies"""
+
+    # ============================================================================
+    # INTEGRACIÓN CON OPENAI (OPCIONAL)
+    # ============================================================================
+
+    def _extract_with_openai(self, text: str) -> Dict[str, Any]:
+        """Extrae información usando OpenAI GPT"""
         try:
             import openai
             
-            # Configurar cliente OpenAI de forma simple
-            client = openai.OpenAI(
-                api_key=self.openai_api_key
-                # Removemos cualquier argumento problemático como proxies
-            )
+            client = openai.OpenAI(api_key=self.openai_api_key)
             
-            # Crear prompt específico para SOAT
-            prompt = self._build_soat_openai_prompt(text)
+            prompt = self._build_openai_prompt(text)
             
-            # Llamar a OpenAI
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
@@ -581,9 +607,6 @@ class MedicalClaimExtractor:
             
             # Procesar respuesta JSON
             try:
-                import json
-                
-                # Limpiar respuesta si tiene texto adicional
                 if ai_response.startswith('```json'):
                     ai_response = ai_response.replace('```json', '').replace('```', '')
                 elif ai_response.startswith('```'):
@@ -595,7 +618,6 @@ class MedicalClaimExtractor:
                 
             except json.JSONDecodeError as e:
                 logger.warning(f"OpenAI: Error parseando JSON: {e}")
-                logger.warning(f"OpenAI response: {ai_response[:500]}...")
                 return self._get_empty_result()
                 
         except ImportError:
@@ -603,102 +625,62 @@ class MedicalClaimExtractor:
             return self._get_empty_result()
         except Exception as e:
             logger.error(f"Error con OpenAI: {str(e)}")
-            # Por ahora, retornar resultado vacío para que no afecte la extracción OCR
             return self._get_empty_result()
 
-
-    def _build_soat_openai_prompt(self, text: str) -> str:
-        """Construye prompt específico para documentos SOAT"""
-        
-        # Limitar texto para no exceder límites de tokens
+    def _build_openai_prompt(self, text: str) -> str:
+        """Construye prompt para OpenAI"""
         text_sample = text[:4000] if len(text) > 4000 else text
         
-        prompt = f"""
-    Analiza este documento de liquidación SOAT colombiano y extrae la información en formato JSON exacto.
+        return f"""
+        Analiza este documento de liquidación SOAT colombiano y extrae la información en formato JSON exacto.
 
-    TEXTO DEL DOCUMENTO:
-    {text_sample}
+        TEXTO DEL DOCUMENTO:
+        {text_sample}
 
-    Extrae ÚNICAMENTE la siguiente información en formato JSON válido:
+        Extrae ÚNICAMENTE la siguiente información en formato JSON válido:
 
-    {{
-    "patient_info": {{
-        "nombre": "nombre completo del paciente/víctima",
-        "documento": "número de documento",
-        "tipo_documento": "tipo (CC, TI, etc.)"
-    }},
-    "policy_info": {{
-        "numero_liquidacion": "número de liquidación completo",
-        "poliza": "número de póliza",
-        "numero_reclamacion": "número de reclamación",
-        "fecha_siniestro": "fecha del siniestro",
-        "fecha_ingreso": "fecha de ingreso",
-        "orden_pago": "orden de pago"
-    }},
-    "procedures": [
         {{
-        "codigo": "código del procedimiento",
-        "descripcion": "descripción del procedimiento", 
-        "cantidad": 1,
-        "valor_total": 0,
-        "valor_pagado": 0,
-        "valor_objetado": 0,
-        "observacion": "observación si existe"
+        "patient_info": {{
+            "nombre": "nombre completo del paciente/víctima",
+            "documento": "número de documento",
+            "tipo_documento": "tipo (CC, TI, etc.)"
+        }},
+        "policy_info": {{
+            "numero_liquidacion": "número de liquidación completo",
+            "poliza": "número de póliza",
+            "numero_reclamacion": "número de reclamación"
+        }},
+        "procedures": [
+            {{
+            "codigo": "código del procedimiento",
+            "descripcion": "descripción del procedimiento", 
+            "cantidad": 1,
+            "valor_total": 0,
+            "valor_pagado": 0,
+            "valor_objetado": 0,
+            "observacion": "observación si existe"
+            }}
+        ],
+        "financial_summary": {{
+            "total_reclamado": 0,
+            "total_objetado": 0,
+            "total_pagado": 0
         }}
-    ],
-    "financial_summary": {{
-        "total_reclamado": 0,
-        "total_objetado": 0,
-        "total_pagado": 0,
-        "valor_nota_credito": 0,
-        "valor_impuestos": 0
-    }},
-    "diagnostics": [
-        {{
-        "codigo": "código CIE-10",
-        "descripcion": "descripción del diagnóstico"
         }}
-    ],
-    "ips_info": {{
-        "nombre": "nombre de la IPS",
-        "nit": "NIT de la IPS"
-    }}
-    }}
 
-    INSTRUCCIONES IMPORTANTES:
-    1. Responde SOLO con el JSON, sin texto adicional
-    2. Usa valores numéricos sin símbolos $ ni comas para los montos
-    3. Si no encuentras un dato, usa "" para strings y 0 para números
-    4. Extrae TODOS los procedimientos de la tabla
-    5. Mantén las observaciones completas para cada procedimiento
-    6. Identifica correctamente códigos CUPS y CIE-10
-
-    JSON:"""
-        
-        return prompt
-
+        Responde SOLO con el JSON, sin texto adicional.
+        """
 
     def _merge_results(self, ocr_result: Dict[str, Any], ai_result: Dict[str, Any]) -> Dict[str, Any]:
         """Combina resultados de OCR y IA"""
-        # Por ahora solo retorna OCR
-        return ocr_result
-    
-    def _extract_hybrid(self, text: str) -> Dict[str, Any]:
-        """Estrategia híbrida"""
-        return self._extract_soat_data(text)
-    
-    def _extract_ai_only(self, text: str) -> Dict[str, Any]:
-        """Estrategia solo IA"""
-        if self.openai_api_key:
-            return self._extract_with_openai_enabled(text)
-        return self._extract_soat_data(text)
-    
-    def _extract_ocr_only(self, text: str) -> Dict[str, Any]:
-        """Estrategia solo OCR"""
-        return self._extract_soat_data(text)
-    
+        return ocr_result  # Por ahora usar solo OCR
+
+    # ============================================================================
+    # MÉTODOS DE RESULTADO Y ERROR
+    # ============================================================================
+
     def _get_empty_result(self) -> Dict[str, Any]:
-        """Retorna estructura vacía del resultado"""
+        """Retorna estructura vacía"""
         return {
             'patient_info': {},
             'policy_info': {},
@@ -708,7 +690,7 @@ class MedicalClaimExtractor:
             'ips_info': {},
             'extraction_details': {}
         }
-    
+
     def _get_error_result(self, error_message: str) -> Dict[str, Any]:
         """Retorna resultado de error"""
         result = self._get_empty_result()
@@ -719,3 +701,132 @@ class MedicalClaimExtractor:
             'success': False
         }
         return result
+
+    # ============================================================================
+    # MÉTODOS DE DEBUG Y TESTING
+    # ============================================================================
+
+    def debug_table_extraction(self, text: str):
+        """Debug para análisis de extracción"""
+        lines = text.split('\n')
+        
+        print("=== DEBUG EXTRACCIÓN DE TABLA ===")
+        print(f"Total líneas: {len(lines)}")
+        
+        # Buscar encabezado
+        for i, line in enumerate(lines):
+            line_clean = line.strip()
+            if ('Código' in line_clean and 'Descripción' in line_clean and 
+                'Cant' in line_clean and 'Valor total' in line_clean):
+                print(f"✅ Encabezado encontrado en línea {i}: {line_clean}")
+                
+                # Mostrar líneas siguientes
+                print("\n--- Líneas después del encabezado ---")
+                for j in range(i+1, min(i+21, len(lines))):
+                    line_data = lines[j].strip()
+                    if line_data:
+                        is_procedure = re.match(r'^(\d{5}|00000)', line_data)
+                        marker = "📋" if is_procedure else "  "
+                        print(f"{marker} Línea {j}: {line_data[:100]}...")
+                break
+        
+        # Buscar procedimientos
+        print(f"\n=== BÚSQUEDA DE PROCEDIMIENTOS ===")
+        matches = list(re.finditer(self.main_procedure_pattern, text, re.IGNORECASE | re.MULTILINE))
+        print(f"Procedimientos encontrados: {len(matches)}")
+        
+        for i, match in enumerate(matches[:10]):
+            codigo = match.group(1)
+            descripcion = match.group(2)[:50]
+            cantidad = match.group(3)
+            print(f"{i+1}. {codigo} - {descripcion}... (Cant: {cantidad})")
+        
+        return matches
+
+    def debug_procedure_validation(self, text: str):
+        """Debug específico para validación"""
+        print("=== DEBUG VALIDACIÓN DE PROCEDIMIENTOS ===")
+        
+        matches = re.finditer(self.main_procedure_pattern, text, re.IGNORECASE | re.MULTILINE | re.DOTALL)
+        
+        valid_procedures = []
+        invalid_procedures = []
+        
+        for i, match in enumerate(matches, 1):
+            try:
+                codigo = match.group(1).strip()
+                descripcion_raw = match.group(2).strip()
+                cantidad = float(match.group(3).strip())
+                valor_total = self._parse_money_value(match.group(4))
+                
+                descripcion = self._clean_description(descripcion_raw)
+                
+                print(f"\n--- PROCEDIMIENTO {i} ---")
+                print(f"Código: {codigo}")
+                print(f"Descripción: {descripcion}")
+                print(f"Valor total: {valor_total}")
+                
+                is_valid = self._is_valid_procedure(codigo, descripcion, valor_total)
+                print(f"🔍 RESULTADO: {'✅ VÁLIDO' if is_valid else '❌ INVÁLIDO'}")
+                
+                if is_valid:
+                    valid_procedures.append({'codigo': codigo, 'descripcion': descripcion})
+                else:
+                    invalid_procedures.append({'codigo': codigo, 'descripcion': descripcion})
+                    
+            except Exception as e:
+                print(f"❌ ERROR procesando procedimiento {i}: {e}")
+        
+        print(f"\n=== RESUMEN ===")
+        print(f"✅ Procedimientos válidos: {len(valid_procedures)}")
+        print(f"❌ Procedimientos inválidos: {len(invalid_procedures)}")
+        
+        return valid_procedures, invalid_procedures
+
+    # ============================================================================
+    # MÉTODOS LEGACY DE COMPATIBILIDAD (PARA NO ROMPER CÓDIGO EXISTENTE)
+    # ============================================================================
+
+    def _extract_soat_data_improved(self, text: str) -> Dict[str, Any]:
+        """Alias para compatibilidad"""
+        return self._extract_soat_data(text)
+
+    def _extract_soat_procedures_table_improved(self, text: str) -> List[Dict[str, Any]]:
+        """Alias para compatibilidad"""
+        return self._extract_procedures(text)
+
+    def _extract_procedures_from_full_text_v2(self, text: str) -> List[Dict[str, Any]]:
+        """Alias para compatibilidad"""
+        return self._extract_procedures(text)
+
+    def _is_valid_procedure_v2(self, codigo: str, descripcion: str, valor_total: float) -> bool:
+        """Alias para compatibilidad"""
+        return self._is_valid_procedure(codigo, descripcion, valor_total)
+
+    def _clean_procedure_description_v2(self, description: str) -> str:
+        """Alias para compatibilidad"""
+        return self._clean_description(description)
+
+    def _clean_observation_v2(self, observation: str) -> str:
+        """Alias para compatibilidad"""
+        return self._clean_observation(observation)
+
+    def _extract_soat_patient_info(self, text: str) -> Dict[str, Any]:
+        """Alias para compatibilidad"""
+        return self._extract_patient_info(text)
+
+    def _extract_soat_policy_info(self, text: str) -> Dict[str, Any]:
+        """Alias para compatibilidad"""
+        return self._extract_policy_info(text)
+
+    def _extract_soat_financial_summary(self, text: str) -> Dict[str, Any]:
+        """Alias para compatibilidad"""
+        return self._extract_financial_summary(text)
+
+    def _extract_soat_diagnostics(self, text: str) -> List[Dict[str, Any]]:
+        """Alias para compatibilidad"""
+        return self._extract_diagnostics(text)
+
+    def _extract_soat_ips_info(self, text: str) -> Dict[str, Any]:
+        """Alias para compatibilidad"""
+        return self._extract_ips_info(text)

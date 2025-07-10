@@ -138,3 +138,25 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024   # 10 MB
 LOGIN_URL = 'login'  # Cambia de '/accounts/login/' a 'login'
 LOGIN_REDIRECT_URL = '/'  # Redirige al dashboard después del login
 LOGOUT_REDIRECT_URL = '/login/'  # Redirige al login después del logout
+
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
+    },
+    'loggers': {
+        'apps.extractor': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
+    },
+}
