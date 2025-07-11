@@ -13,6 +13,7 @@ class MedicalClaimExtractor:
     """
     Extractor optimizado específicamente para glosas SOAT colombianas
     Versión mejorada que maneja procedimientos en múltiples formatos
+    Y extrae información adicional para formato Excel IPS
     """
     
     def __init__(self, openai_api_key=None):
@@ -70,6 +71,10 @@ class MedicalClaimExtractor:
             'fecha_ingreso': [
                 r'Fecha\s+de\s+ingreso\s*:\s*(\d{1,2}/\d{1,2}/\d{4})',
                 r'ingreso\s*:\s*(\d{1,2}/\d{1,2}/\d{4})',
+            ],
+            'fecha_pago': [
+                r'Fecha\s+de\s+Pago\s*:\s*(\d{1,2}/\d{1,2}/\d{4})',
+                r'Pago\s*:\s*(\d{1,2}/\d{1,2}/\d{4})',
             ],
             'orden_pago': [
                 r'Orden\s+de\s+pago\s*:\s*(\d+)',
@@ -299,7 +304,7 @@ class MedicalClaimExtractor:
     def _extract_procedure_from_line(self, line: str, all_lines: List[str], line_idx: int, table_end: int) -> Optional[Dict[str, Any]]:
         """
         Extrae un procedimiento de una línea específica
-        Maneja todos los formatos posibles
+        Maneja todos los formatos posibles y MEJORA la extracción de observaciones
         """
         # Patrón 1: Línea completa con código de 5 dígitos
         pattern1 = r'^(\d{5})\s+([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s\w\/\#\,\.\-\(\)\%]+?)\s+(\d+(?:\.\d+)?)\s+\$?([\d,\.]+)\s+\$?([\d,\.]+)\s+\$?([\d,\.]+)'
@@ -330,7 +335,36 @@ class MedicalClaimExtractor:
                     'extraction_method': 'table_line'
                 }
         
-        # Patrón 2: Solo código en la línea
+        # Patrón 2: Código compuesto (como 19934768-18)
+        pattern_compuesto = r'^(\d{5,8}-\d{1,2})\s+([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s\w\/\#\,\.\-\(\)\%]+?)\s+(\d+(?:\.\d+)?)\s+\$?([\d,\.]+)\s+\$?([\d,\.]+)\s+\$?([\d,\.]+)'
+        match = re.match(pattern_compuesto, line, re.IGNORECASE)
+        
+        if match:
+            codigo = match.group(1).strip()
+            descripcion = self._clean_description(match.group(2).strip())
+            cantidad = float(match.group(3).strip())
+            valor_total = self._parse_money_value(match.group(4))
+            valor_pagado = self._parse_money_value(match.group(5))
+            valor_objetado = self._parse_money_value(match.group(6))
+            
+            # Buscar observación
+            observacion = self._extract_observation_from_lines(all_lines, line_idx, table_end)
+            
+            if self._is_valid_procedure(codigo, descripcion, valor_total):
+                return {
+                    'codigo': codigo,
+                    'descripcion': descripcion,
+                    'cantidad': int(cantidad),
+                    'valor_unitario': valor_total / cantidad if cantidad > 0 else 0,
+                    'valor_total': valor_total,
+                    'valor_pagado': valor_pagado,
+                    'valor_objetado': valor_objetado,
+                    'observacion': observacion,
+                    'estado': 'objetado' if valor_objetado > 0 else 'aceptado',
+                    'extraction_method': 'table_line_compound'
+                }
+        
+        # Patrón 3: Solo código en la línea
         if re.match(r'^(\d{5})$', line.strip()):
             codigo = line.strip()
             # Buscar descripción y valores en líneas siguientes
@@ -366,7 +400,7 @@ class MedicalClaimExtractor:
                                 'extraction_method': 'multiline'
                             }
         
-        # Patrón 3: Procedimiento sin código (como VENDA ELASTICA)
+        # Patrón 4: Procedimiento sin código (como VENDA ELASTICA)
         if re.match(r'^[A-ZÁÉÍÓÚÑ]', line, re.IGNORECASE) and '$' in line:
             # Patrón para línea sin código
             no_code_pattern = r'^([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s\w\/\#\,\.\-\(\)\%]+?)\s+(\d+(?:\.\d+)?)\s+\$?([\d,\.]+)\s+\$?([\d,\.]+)\s+\$?([\d,\.]+)'
@@ -396,35 +430,61 @@ class MedicalClaimExtractor:
         return None
 
     def _extract_observation_from_lines(self, lines: List[str], start_idx: int, end_idx: int) -> str:
-        """Extrae observaciones que pueden estar en líneas siguientes"""
+        """
+        Extrae observaciones que pueden estar en líneas siguientes
+        MEJORADO para capturar mejor las observaciones de glosas
+        """
         observation = ""
         
-        # Buscar en la misma línea
+        # Buscar en la misma línea después de los valores
         current_line = lines[start_idx]
-        obs_match = re.search(r'(\d{4})\s*>>\s*(.+?)$', current_line)
+        
+        # Patrón 1: Observación al final de la línea (después de valores)
+        obs_pattern1 = r'\$[\d,\.]+\s+\$[\d,\.]+\s+\$[\d,\.]+\s+(.+)$'
+        obs_match = re.search(obs_pattern1, current_line)
+        if obs_match:
+            observation = obs_match.group(1).strip()
+        
+        # Patrón 2: Observación con código de error (como 4567 >> texto)
+        obs_pattern2 = r'(\d{4})\s*>>\s*(.+?)$'
+        obs_match = re.search(obs_pattern2, current_line)
         if obs_match:
             observation = obs_match.group(2).strip()
         
         # Buscar en líneas siguientes
         for i in range(start_idx + 1, min(start_idx + 5, end_idx)):
+            if i >= len(lines):
+                break
+                
             line = lines[i].strip()
+            
+            # Si encontramos un nuevo procedimiento, parar
+            if re.match(r'^\d{5}', line) or 'Total' in line:
+                break
+            
+            # Observación con código
             if re.match(r'^\d{4}\s*>>', line):
                 obs_match = re.search(r'^\d{4}\s*>>\s*(.+)', line)
                 if obs_match:
+                    new_obs = obs_match.group(1).strip()
                     if observation:
-                        observation += " " + obs_match.group(1).strip()
+                        observation += " " + new_obs
                     else:
-                        observation = obs_match.group(1).strip()
+                        observation = new_obs
+            
+            # Continuación de observación (línea que empieza con >>)
             elif re.match(r'^>>', line):
-                # Continuación de observación
                 continuation = line[2:].strip()
                 if observation:
                     observation += " " + continuation
                 else:
                     observation = continuation
-            elif re.match(r'^\d{5}', line) or 'Total' in line:
-                # Nueva línea de procedimiento o fin de tabla
-                break
+            
+            # Texto libre que podría ser observación
+            elif line and not re.match(r'^\d', line) and len(line) > 10:
+                # Solo si no tenemos observación aún y la línea parece ser texto descriptivo
+                if not observation and any(word in line.upper() for word in ['GLOSA', 'OBJETA', 'NO', 'PERTINENTE', 'CORRESPONDE']):
+                    observation = line
         
         return self._clean_observation(observation)
 
@@ -522,7 +582,7 @@ class MedicalClaimExtractor:
             'VENDA', 'CATETER', 'CLORURO', 'SOLUCION', 'INYECTABLE',
             'RADIOGRAFIA', 'CONSULTA', 'EXAMEN', 'PROCEDIMIENTO',
             'MEDICAMENTO', 'SUMINISTRO', 'MATERIAL', 'INSUMO',
-            'YESO', 'ALGODON', 'BOLSA', 'ML', 'MG', 'G'
+            'YESO', 'ALGODON', 'BOLSA', 'ML', 'MG', 'G', 'JERINGA'
         ]
         
         descripcion_upper = descripcion.upper()
@@ -538,6 +598,110 @@ class MedicalClaimExtractor:
             return False
         
         return True
+
+    # ============================================================================
+    # NUEVOS MÉTODOS PARA GENERAR CSV EN FORMATO EXCEL
+    # ============================================================================
+
+    def generate_excel_format_csv(self, extraction_result: Dict[str, Any]) -> str:
+        """
+        Genera CSV en el formato del Excel de la IPS
+        Orden: NOMBRE PACIENTE, # ID, FACTURA, FECHA FACTURA, VALOR TOTAL GLOSA, 
+               CÓDIGO ITEM, DETALLE DE GLOSA, VALOR ITEM, VALOR ACEPTADO, 
+               VALOR NO ACEPTADO, RESPUESTA IPS, CLASIFICACIÓN GLOSA, 
+               FECHA RECIBIDO GLOSA, DIAS GLOSA, FECHA RADICADO RESPUESTA, 
+               DIAS RESPUESTA, CÓDIGO RADICACIÓN, FUNCIONARIO, Entidad,
+               DESCRIPCIÓN PROCEDIMIENTO
+        """
+        import csv
+        from io import StringIO
+        
+        output = StringIO()
+        writer = csv.writer(output)
+        
+        # Headers en el orden exacto del Excel + descripción del procedimiento
+        headers = [
+            'NOMBRE PACIENTE', '# ID', 'FACTURA', 'FECHA FACTURA', 'VALOR TOTAL GLOSA',
+            'CÓDIGO ITEM', 'DETALLE DE GLOSA', 'VALOR ITEM', 'VALOR ACEPTADO', 
+            'VALOR NO ACEPTADO', 'RESPUESTA IPS', 'CLASIFICACIÓN GLOSA', 
+            'FECHA RECIBIDO GLOSA', 'DIAS GLOSA', 'FECHA RADICADO RESPUESTA', 
+            'DIAS RESPUESTA', 'CÓDIGO RADICACIÓN', 'FUNCIONARIO', 'Entidad',
+            'DESCRIPCIÓN PROCEDIMIENTO'
+        ]
+        writer.writerow(headers)
+        
+        # Extraer información general
+        patient_info = extraction_result.get('patient_info', {})
+        policy_info = extraction_result.get('policy_info', {})
+        financial_summary = extraction_result.get('financial_summary', {})
+        procedures = extraction_result.get('procedures', [])
+        
+        # Información general que se repite para cada procedimiento
+        nombre_paciente = patient_info.get('nombre', '')
+        id_paciente = patient_info.get('documento', '')
+        factura = policy_info.get('numero_reclamacion', '')
+        fecha_factura = self._format_date_for_excel(policy_info.get('fecha_siniestro', ''))
+        valor_total_glosa = financial_summary.get('total_reclamado', 0)
+        fecha_recibido = self._format_date_for_excel(policy_info.get('fecha_pago', ''))
+        
+        # Si no hay procedimientos, crear una fila con la información general
+        if not procedures:
+            writer.writerow([
+                nombre_paciente, id_paciente, factura, fecha_factura, valor_total_glosa,
+                '', '', 0, 0, 0, '', '', fecha_recibido, '', '', '', '', '', '',
+                ''  # DESCRIPCIÓN PROCEDIMIENTO vacía
+            ])
+        else:
+            # Crear una fila por cada procedimiento
+            for proc in procedures:
+                codigo_item = proc.get('codigo', '')
+                detalle_glosa = proc.get('observacion', '')
+                valor_item = proc.get('valor_total', 0)
+                valor_aceptado = proc.get('valor_pagado', 0)
+                valor_no_aceptado = proc.get('valor_objetado', 0)
+                
+                # Campos que quedan vacíos (para completar manualmente por la IPS)
+                respuesta_ips = ''
+                clasificacion_glosa = ''
+                dias_glosa = ''
+                fecha_radicado_respuesta = ''
+                dias_respuesta = ''
+                codigo_radicacion = ''
+                funcionario = ''
+                entidad = ''
+                
+                # NUEVO CAMPO SOLICITADO
+                descripcion_procedimiento = proc.get('descripcion', '')
+                
+                writer.writerow([
+                    nombre_paciente, id_paciente, factura, fecha_factura, valor_total_glosa,
+                    codigo_item, detalle_glosa, valor_item, valor_aceptado, valor_no_aceptado,
+                    respuesta_ips, clasificacion_glosa, fecha_recibido, dias_glosa,
+                    fecha_radicado_respuesta, dias_respuesta, codigo_radicacion,
+                    funcionario, entidad, descripcion_procedimiento
+                ])
+        
+        return output.getvalue()
+
+    def _format_date_for_excel(self, date_str: str) -> str:
+        """Formatea fechas para Excel (DD/MM/YYYY)"""
+        if not date_str:
+            return ''
+        
+        # Si ya está en formato DD/MM/YYYY, mantenerlo
+        if re.match(r'\d{1,2}/\d{1,2}/\d{4}', date_str):
+            return date_str
+        
+        # Convertir otros formatos comunes
+        try:
+            # Formato YYYY-MM-DD
+            if re.match(r'\d{4}-\d{1,2}-\d{1,2}', date_str):
+                parts = date_str.split('-')
+                return f"{parts[2]}/{parts[1]}/{parts[0]}"
+        except:
+            pass
+        
+        return date_str
 
     # ============================================================================
     # INTEGRACIÓN MEJORADA CON OPENAI
@@ -579,7 +743,8 @@ class MedicalClaimExtractor:
                     3. Algunos códigos son compuestos (19922562-10)
                     4. Los procedimientos pueden estar en múltiples líneas
                     5. NUNCA omitas procedimientos por no tener código estándar
-                    6. Si encuentras el mismo código con diferente descripción, son procedimientos DIFERENTES"""
+                    6. Si encuentras el mismo código con diferente descripción, son procedimientos DIFERENTES
+                    7. EXTRAE LAS OBSERVACIONES DE GLOSAS - es información crítica"""
                 },
                 {
                     "role": "user", 
@@ -642,6 +807,8 @@ class MedicalClaimExtractor:
                         logger.info(f"     Descripción: {proc.get('descripcion', 'N/A')}")
                         logger.info(f"     Valor: ${proc.get('valor_total', 0):,.0f}")
                         logger.info(f"     Estado: {proc.get('estado', 'N/A')}")
+                        if proc.get('observacion'):
+                            logger.info(f"     Observación: {proc.get('observacion', '')[:100]}...")
                 
                 # Validar y limpiar datos
                 ai_data = self._validate_openai_data(ai_data)
@@ -664,7 +831,7 @@ class MedicalClaimExtractor:
             return self._get_empty_result()
 
     def _build_enhanced_openai_prompt(self, text: str) -> str:
-        """Construye prompt mejorado para OpenAI que captura TODOS los procedimientos"""
+        """Construye prompt mejorado para OpenAI que captura TODOS los procedimientos y observaciones"""
         # Usar más texto para asegurar que capturamos todos los procedimientos
         text_sample = text[:8000] if len(text) > 8000 else text
         
@@ -693,9 +860,21 @@ class MedicalClaimExtractor:
            - Sin código: directamente la descripción seguida de valores
            
         5. Busca ESPECÍFICAMENTE en la tabla que tiene columnas como:
-           Código | Descripción | Cant | Valor total | Valor pagado | Valor objetado
+           Código | Descripción | Cant | Valor total | Valor pagado | Valor objetado | Observación
            
         6. INCLUYE TODOS los items que aparezcan en esta tabla, sin excepción.
+
+        7. EXTRAE LAS OBSERVACIONES: Las observaciones son CRÍTICAS. Pueden aparecer:
+           - Al final de la línea del procedimiento
+           - En líneas separadas con formato "4567 >> texto de la observación"
+           - Como texto libre después de los valores monetarios
+           
+        8. Para INFORMACIÓN GENERAL, extrae:
+           - Nombre completo del paciente (después de "Víctima :")
+           - Número de documento de identidad  
+           - Número de reclamación/factura
+           - Fechas importantes (siniestro, ingreso, pago)
+           - Valores totales de la liquidación
 
         TEXTO DEL DOCUMENTO:
         {text_sample}
@@ -710,10 +889,11 @@ class MedicalClaimExtractor:
         }},
         "policy_info": {{
             "numero_liquidacion": "número de liquidación",
-            "poliza": "número de póliza",
+            "poliza": "número de póliza", 
             "numero_reclamacion": "número de reclamación",
             "fecha_siniestro": "fecha del siniestro",
             "fecha_ingreso": "fecha de ingreso",
+            "fecha_pago": "fecha de pago",
             "orden_pago": "orden de pago"
         }},
         "procedures": [
@@ -724,7 +904,7 @@ class MedicalClaimExtractor:
             "valor_total": valor total numérico,
             "valor_pagado": valor pagado numérico,
             "valor_objetado": valor objetado numérico,
-            "observacion": "observación si existe",
+            "observacion": "observación/glosa si existe (MUY IMPORTANTE)",
             "estado": "objetado o aceptado",
             "extraction_method": "ai_extraction"
             }}
@@ -754,10 +934,11 @@ class MedicalClaimExtractor:
         - Si el mismo código aparece varias veces, incluir TODAS las ocurrencias
         - Los valores monetarios deben ser números, no strings
         - Si no tiene código, usar "00000"
+        - EXTRAE LAS OBSERVACIONES - son críticas para el proceso de glosas
         """
 
     # ============================================================================
-    # MÉTODOS AUXILIARES (sin cambios significativos)
+    # MÉTODOS AUXILIARES MEJORADOS
     # ============================================================================
 
     def _extract_text_from_pdf(self, pdf_path: str) -> str:
@@ -841,15 +1022,19 @@ class MedicalClaimExtractor:
         return description
 
     def _clean_observation(self, observation: str) -> str:
-        """Limpieza de observación"""
+        """Limpieza de observación mejorada"""
         if not observation:
             return ""
         
-        # Normalizar y truncar
+        # Normalizar espacios
         observation = re.sub(r'\s+', ' ', observation.strip())
         
-        if len(observation) > 300:
-            observation = observation[:300] + "..."
+        # Remover caracteres de inicio problemáticos
+        observation = re.sub(r'^[>\s]+', '', observation)
+        
+        # Truncar si es muy largo
+        if len(observation) > 500:
+            observation = observation[:500] + "..."
         
         return observation
 
@@ -858,6 +1043,7 @@ class MedicalClaimExtractor:
         cie10_descriptions = {
             'S836': 'Esguince y distensión de otras partes y las no especificadas de la rodilla',
             'S83': 'Luxación, esguince y distensión de articulaciones y ligamentos de la rodilla',
+            'S500': 'Contusión superficial del codo',
             'M25': 'Otros trastornos articulares no clasificados en otra parte',
             'S72': 'Fractura del fémur',
             'S82': 'Fractura de la pierna, incluyendo el tobillo',
@@ -1095,6 +1281,10 @@ class MedicalClaimExtractor:
                 # Asegurar que hay método de extracción
                 if 'extraction_method' not in proc:
                     proc['extraction_method'] = 'ai_extraction'
+                
+                # Limpiar observación
+                if 'observacion' in proc:
+                    proc['observacion'] = self._clean_observation(proc['observacion'])
         
         # Asegurar tipos numéricos en resumen financiero
         if 'financial_summary' in data:
@@ -1104,7 +1294,6 @@ class MedicalClaimExtractor:
         
         return data
 
-    
     def _merge_results(self, ocr_result: Dict[str, Any], ai_result: Dict[str, Any]) -> Dict[str, Any]:
         """Combina resultados de OCR y IA de manera inteligente preservando TODOS los procedimientos"""
         ocr_procedures = ocr_result.get('procedures', [])
@@ -1178,7 +1367,6 @@ class MedicalClaimExtractor:
         
         return ocr_result
 
-
     def _are_exact_same_procedure(self, proc1: Dict[str, Any], proc2: Dict[str, Any]) -> bool:
         """
         Determina si dos procedimientos son EXACTAMENTE el mismo
@@ -1230,77 +1418,6 @@ class MedicalClaimExtractor:
         return True
 
 
-    def _count_duplicated_codes_in_pdf(self, text: str) -> Dict[str, int]:
-        """Método de diagnóstico para contar códigos duplicados en el PDF"""
-        code_counts = {}
-        
-        # Buscar todos los códigos en el texto
-        lines = text.split('\n')
-        for line in lines:
-            # Buscar códigos de 5 dígitos al inicio de línea
-            match = re.match(r'^(\d{5})\s+', line.strip())
-            if match:
-                code = match.group(1)
-                code_counts[code] = code_counts.get(code, 0) + 1
-        
-        # Log de códigos duplicados
-        duplicated = {code: count for code, count in code_counts.items() if count > 1}
-        if duplicated:
-            logger.info("Códigos duplicados encontrados en PDF:")
-            for code, count in duplicated.items():
-                logger.info(f"  Código {code}: {count} veces")
-        
-        return code_counts
-
-
-
-    def _are_descriptions_similar(self, desc1: str, desc2: str) -> bool:
-        """
-        Determina si dos descripciones son similares
-        Para evitar duplicados de procedimientos con descripciones ligeramente diferentes
-        """
-        # Normalizar para comparación
-        desc1_norm = desc1.upper().strip()
-        desc2_norm = desc2.upper().strip()
-        
-        # Si son exactamente iguales
-        if desc1_norm == desc2_norm:
-            return True
-        
-        # Si una está contenida en la otra (para casos donde una es más detallada)
-        if desc1_norm in desc2_norm or desc2_norm in desc1_norm:
-            return True
-        
-        # Comparar las primeras palabras significativas
-        words1 = desc1_norm.split()[:3]  # Primeras 3 palabras
-        words2 = desc2_norm.split()[:3]
-        
-        # Si al menos 2 de las primeras 3 palabras coinciden
-        common_words = set(words1) & set(words2)
-        if len(common_words) >= 2:
-            return True
-        
-        return False
-
-    def debug_table_extraction(self, text: str):
-        """Debug para análisis de extracción de tabla"""
-        lines = text.split('\n')
-        
-        print("=== DEBUG EXTRACCIÓN DE TABLA ===")
-        print(f"Total líneas: {len(lines)}")
-        
-        # Buscar la tabla
-        for i, line in enumerate(lines):
-            if re.search(r'Código\s+Descripción\s+Cant', line, re.IGNORECASE):
-                print(f"\nEncabezado de tabla encontrado en línea {i}: {line}")
-                
-                # Mostrar las siguientes 20 líneas
-                print("\n--- Contenido de la tabla ---")
-                for j in range(i, min(i + 20, len(lines))):
-                    print(f"Línea {j}: {lines[j]}")
-                break
-
-
 # Ejemplo de uso
 if __name__ == "__main__":
     # Configurar logging
@@ -1317,5 +1434,12 @@ if __name__ == "__main__":
     pdf_path = "path/to/your/pdf.pdf"
     result = extractor.extract_from_pdf(pdf_path, strategy='hybrid')
     
+    # Generar CSV en formato Excel
+    csv_content = extractor.generate_excel_format_csv(result)
+    
     # Mostrar resultados
+    print("=== DATOS EXTRAÍDOS ===")
     print(json.dumps(result, indent=2, ensure_ascii=False))
+    
+    print("\n=== CSV EN FORMATO EXCEL ===")
+    print(csv_content)

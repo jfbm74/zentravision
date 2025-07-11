@@ -1294,14 +1294,26 @@ class MedicalClaimExtractor:
         
         return data
 
+    
+
     def _merge_results(self, ocr_result: Dict[str, Any], ai_result: Dict[str, Any]) -> Dict[str, Any]:
-        """Combina resultados de OCR y IA de manera inteligente preservando TODOS los procedimientos"""
+        """
+        MEJORADO: Combina resultados priorizando información más completa
+        """
         ocr_procedures = ocr_result.get('procedures', [])
         ai_procedures = ai_result.get('procedures', [])
         
-        logger.info(f"Combinando resultados: OCR={len(ocr_procedures)} procs, AI={len(ai_procedures)} procs")
+        logger.info(f"=== DETALLE DEL MERGE ===")
+        logger.info(f"OCR encontró: {len(ocr_procedures)} procedimientos")
+        logger.info(f"AI encontró: {len(ai_procedures)} procedimientos")
+
+        for i, proc in enumerate(ocr_procedures):
+            logger.info(f"OCR-{i+1}: {proc['codigo']} - {proc['descripcion'][:30]}... (${proc['valor_total']:,.0f})")
+
+        for i, proc in enumerate(ai_procedures):
+            logger.info(f"AI-{i+1}: {proc['codigo']} - {proc['descripcion'][:30]}... (${proc['valor_total']:,.0f})")
         
-        # En lugar de usar un mapa simple, crear una lista más específica para evitar colisiones
+        # Crear lista de procedimientos combinados
         merged_procedures = []
         added_count = 0
         updated_count = 0
@@ -1314,39 +1326,52 @@ class MedicalClaimExtractor:
         for ai_proc in ai_procedures:
             found_exact_match = False
             
-            # Buscar coincidencia EXACTA (código + descripción + valores similares)
             for i, merged_proc in enumerate(merged_procedures):
-                if (merged_proc['codigo'] == ai_proc['codigo'] and 
-                    self._are_exact_same_procedure(merged_proc, ai_proc)):
+                if self._are_exact_same_procedure(merged_proc, ai_proc):
                     
-                    # Actualizar con información más completa de AI
-                    if len(ai_proc.get('descripcion', '')) > len(merged_proc.get('descripcion', '')):
-                        merged_procedures[i]['descripcion'] = ai_proc['descripcion']
+                    # NUEVO: Priorizar el código más específico
+                    if merged_proc['codigo'] == "00000" and ai_proc['codigo'] != "00000":
+                        merged_procedures[i]['codigo'] = ai_proc['codigo']
+                        logger.info(f"Actualizado código de '00000' a '{ai_proc['codigo']}' para {merged_proc['descripcion'][:30]}...")
+                    elif ai_proc['codigo'] == "00000" and merged_proc['codigo'] != "00000":
+                        # Mantener el código existente
+                        logger.info(f"Manteniendo código '{merged_proc['codigo']}' sobre '00000' para {merged_proc['descripcion'][:30]}...")
                     
-                    if ai_proc.get('observacion') and not merged_proc.get('observacion'):
-                        merged_procedures[i]['observacion'] = ai_proc['observacion']
+                    # NUEVO: Priorizar la observación más completa
+                    obs_existing = merged_proc.get('observacion', '').strip()
+                    obs_ai = ai_proc.get('observacion', '').strip()
+                    
+                    if len(obs_ai) > len(obs_existing):
+                        merged_procedures[i]['observacion'] = obs_ai
+                        logger.info(f"Actualizada observación para {merged_proc['codigo']}: {obs_ai[:50]}...")
+                    
+                    # NUEVO: Verificar consistencia de valores
+                    if abs(merged_proc['valor_total'] - ai_proc['valor_total']) > 100:
+                        logger.warning(f"Valores inconsistentes para {merged_proc['codigo']}: {merged_proc['valor_total']} vs {ai_proc['valor_total']}")
+                    
+                    # Actualizar otros campos faltantes
+                    for field in ['descripcion', 'cantidad', 'valor_unitario', 'valor_pagado', 'valor_objetado', 'estado']:
+                        if not merged_procedures[i].get(field) and ai_proc.get(field):
+                            merged_procedures[i][field] = ai_proc[field]
                     
                     found_exact_match = True
                     updated_count += 1
-                    logger.debug(f"Actualizado procedimiento existente: {ai_proc['codigo']} - {ai_proc['descripcion'][:30]}")
+                    logger.info(f"Actualizado procedimiento existente: {ai_proc['codigo']} - {ai_proc['descripcion'][:30]}...")
                     break
             
-            # Si NO se encontró coincidencia exacta, es un procedimiento ADICIONAL
+            # Si no se encontró match exacto, agregar como nuevo
             if not found_exact_match:
                 merged_procedures.append(ai_proc)
                 added_count += 1
-                logger.debug(f"Agregado nuevo procedimiento de AI: {ai_proc['codigo']} - {ai_proc['descripcion'][:30]}")
+                logger.info(f"Agregado nuevo procedimiento de AI: {ai_proc['codigo']} - {ai_proc['descripcion'][:30]}...")
         
-        logger.info(f"Merge completado: {len(merged_procedures)} procedimientos totales "
-                f"({added_count} agregados, {updated_count} actualizados)")
+        logger.info(f"Merge completado: {len(merged_procedures)} procedimientos totales ({added_count} agregados, {updated_count} actualizados)")
         
-        # Log detallado de todos los procedimientos finales
-        logger.info("Procedimientos finales después del merge:")
-        for i, proc in enumerate(merged_procedures, 1):
-            logger.info(f"  {i:2d}. {proc['codigo']} - {proc['descripcion'][:50]}... (${proc['valor_total']:,.0f})")
+        # Validar y limpiar procedimientos después del merge
+        validated_procedures = self._validate_merged_procedures(merged_procedures)
         
-        # Actualizar el resultado con los procedimientos combinados
-        ocr_result['procedures'] = merged_procedures
+        # Actualizar el resultado con los procedimientos validados
+        ocr_result['procedures'] = validated_procedures
         
         # Combinar otra información si AI la tiene y OCR no
         for section in ['patient_info', 'policy_info', 'financial_summary', 'ips_info']:
@@ -1366,57 +1391,164 @@ class MedicalClaimExtractor:
                 ocr_result['diagnostics'] = ai_result['diagnostics']
         
         return ocr_result
+    
+
+    def _validate_merged_procedures(self, procedures: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Valida y limpia procedimientos después del merge
+        """
+        validated_procedures = []
+        seen_descriptions = {}
+        
+        for proc in procedures:
+            desc_key = proc.get('descripcion', '').upper().strip()
+            
+            if desc_key in seen_descriptions:
+                existing_proc = seen_descriptions[desc_key]
+                logger.warning(f"Posible duplicado detectado: {desc_key[:30]}...")
+                
+                # Comparar y mantener el más completo
+                if self._is_more_complete_procedure(proc, existing_proc):
+                    seen_descriptions[desc_key] = proc
+                    # Reemplazar en la lista validada
+                    for i, vp in enumerate(validated_procedures):
+                        if vp.get('descripcion', '').upper().strip() == desc_key:
+                            validated_procedures[i] = proc
+                            logger.info(f"Reemplazado procedimiento duplicado con versión más completa: {desc_key[:30]}...")
+                            break
+                # Si no es más completo, no agregar
+            else:
+                seen_descriptions[desc_key] = proc
+                validated_procedures.append(proc)
+        
+        logger.info(f"Validación completada: {len(validated_procedures)} procedimientos únicos de {len(procedures)} originales")
+        return validated_procedures
+
+
+
+
+    def _is_more_complete_procedure(self, proc1: Dict[str, Any], proc2: Dict[str, Any]) -> bool:
+        """
+        Determina cuál procedimiento tiene información más completa
+        """
+        score1 = 0
+        score2 = 0
+        
+        # Puntuación por código válido
+        if proc1.get('codigo') != "00000" and re.match(r'^\d{5}', proc1.get('codigo', '')):
+            score1 += 3
+        if proc2.get('codigo') != "00000" and re.match(r'^\d{5}', proc2.get('codigo', '')):
+            score2 += 3
+        
+        # Puntuación por observación
+        if len(proc1.get('observacion', '').strip()) > 10:
+            score1 += 2
+        if len(proc2.get('observacion', '').strip()) > 10:
+            score2 += 2
+        
+        # Puntuación por consistencia de valores
+        if proc1.get('valor_total', 0) > 0:
+            score1 += 1
+        if proc2.get('valor_total', 0) > 0:
+            score2 += 1
+        
+        # Puntuación por campos completos
+        for field in ['descripcion', 'cantidad', 'valor_unitario', 'valor_pagado', 'valor_objetado', 'estado']:
+            if proc1.get(field):
+                score1 += 0.5
+            if proc2.get(field):
+                score2 += 0.5
+        
+        logger.debug(f"Comparación de completitud: Proc1={score1}, Proc2={score2}")
+        return score1 > score2
+
+
+
+    # Test específico para verificar que no se crean duplicados en el merge
+    def test_duplicate_procedure_merge():
+        """
+        Test para verificar que no se crean duplicados en el merge
+        """
+        # Simular el caso problemático
+        ocr_proc = {
+            'codigo': '39305',
+            'descripcion': 'Materiales de sutura y curaci',
+            'valor_total': 95500,
+            'valor_pagado': 0,
+            'valor_objetado': 95500,
+            'observacion': '',
+            'cantidad': 1,
+            'valor_unitario': 95500,
+            'estado': 'objetado',
+            'extraction_method': 'table_line'
+        }
+        
+        ai_proc = {
+            'codigo': '00000',
+            'descripcion': 'Materiales de sutura y curaci',
+            'valor_total': 95500,
+            'valor_pagado': 0,
+            'valor_objetado': 95500,
+            'observacion': '1231 >> Los cargos por procedimientos o actividades que vienen relacionados...',
+            'cantidad': 1,
+            'valor_unitario': 95500,
+            'estado': 'objetado',
+            'extraction_method': 'ai_extraction'
+        }
+        
+        ocr_result = {'procedures': [ocr_proc]}
+        ai_result = {'procedures': [ai_proc]}
+        
+        # El resultado debería tener solo UN procedimiento con código '39305' y observación completa
+        merged_result = _merge_results(None, ocr_result, ai_result)
+        
+        assert len(merged_result['procedures']) == 1, "Debe haber solo un procedimiento después del merge"
+        final_proc = merged_result['procedures'][0]
+        assert final_proc['codigo'] == '39305', "El código debe ser el válido '39305'"
+        assert len(final_proc['observacion']) > 10, "La observación debe estar poblada"
+        
+        print("✅ Test de duplicados pasó correctamente")
+
+    if __name__ == "__main__":
+        test_duplicate_procedure_merge()
+
 
     def _are_exact_same_procedure(self, proc1: Dict[str, Any], proc2: Dict[str, Any]) -> bool:
         """
         Determina si dos procedimientos son EXACTAMENTE el mismo
-        Usa criterios más estrictos para evitar fusionar procedimientos diferentes con el mismo código
+        MEJORADO para manejar casos de códigos inconsistentes
         """
-        # Mismo código es requisito básico
-        if proc1['codigo'] != proc2['codigo']:
-            return False
-        
         # Normalizar descripciones para comparación
         desc1 = proc1.get('descripcion', '').upper().strip()
         desc2 = proc2.get('descripcion', '').upper().strip()
         
         # Si las descripciones son exactamente iguales
-        if desc1 == desc2:
-            return True
-        
-        # Si una descripción está completamente contenida en la otra (pero ambas deben ser sustanciales)
-        if len(desc1) > 20 and len(desc2) > 20:
-            if desc1 in desc2 or desc2 in desc1:
+        if desc1 == desc2 and len(desc1) > 10:  # Descripción sustancial
+            
+            # Caso especial: uno tiene código válido y otro "00000"
+            codigo1 = proc1.get('codigo', '')
+            codigo2 = proc2.get('codigo', '')
+            
+            # Si uno es "00000" y el otro es un código válido, considerar como el mismo
+            if (codigo1 == "00000" and re.match(r'^\d{5}', codigo2)) or \
+            (codigo2 == "00000" and re.match(r'^\d{5}', codigo1)):
+                logger.info(f"Detectado procedimiento con códigos inconsistentes: {codigo1} vs {codigo2} - {desc1[:30]}...")
                 return True
-        
-        # Comparar valores monetarios - si son muy diferentes, probablemente son procedimientos distintos
-        valor1 = proc1.get('valor_total', 0)
-        valor2 = proc2.get('valor_total', 0)
-        
-        if valor1 > 0 and valor2 > 0:
-            # Si los valores difieren en más del 10%, probablemente son diferentes
-            diff_percentage = abs(valor1 - valor2) / max(valor1, valor2)
-            if diff_percentage > 0.1:
-                return False
-        
-        # Para códigos como 39005 que aparecen múltiples veces, ser muy específico
-        # Revisar palabras clave distintivas en las descripciones
-        if proc1['codigo'] in ['39005', '39118', '39105']:
-            # Buscar palabras clave distintivas
-            keywords1 = set(desc1.split())
-            keywords2 = set(desc2.split())
             
-            # Si comparten menos del 70% de las palabras, son diferentes
-            common_words = keywords1 & keywords2
-            total_unique_words = keywords1 | keywords2
+            # Si ambos códigos son iguales
+            if codigo1 == codigo2:
+                return True
+                
+            # Comparar valores monetarios para confirmar
+            valor1 = proc1.get('valor_total', 0)
+            valor2 = proc2.get('valor_total', 0)
             
-            if len(total_unique_words) > 0:
-                similarity = len(common_words) / len(total_unique_words)
-                if similarity < 0.7:
-                    return False
+            if valor1 > 0 and valor2 > 0:
+                diff_percentage = abs(valor1 - valor2) / max(valor1, valor2)
+                if diff_percentage < 0.05:  # Menos del 5% de diferencia
+                    return True
         
-        return True
-
+        return False
 
 # Ejemplo de uso
 if __name__ == "__main__":
