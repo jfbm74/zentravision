@@ -662,15 +662,19 @@ def download_batch_files(request, batch_id, file_type):
     
     raise Http404("Tipo de archivo no soportado")
 
+
 def generate_consolidated_csv(batch):
-    """Genera un CSV consolidado con todos los pacientes del batch"""
+    """
+    Genera un CSV consolidado con todos los pacientes del batch
+    CORRECCIÓN: Uso del extractor para generar CSV individual antes de combinar
+    """
     import csv
     from io import StringIO
     
     output = StringIO()
     writer = csv.writer(output)
     
-    # Headers consolidados
+    # Headers consolidados (mismos que en CSV individual + número de sección)
     headers = [
         'NUMERO_SECCION', 'NOMBRE PACIENTE', '# ID', 'FACTURA', 'FECHA FACTURA', 
         'VALOR TOTAL GLOSA', 'CÓDIGO ITEM', 'DETALLE DE GLOSA', 'VALOR ITEM', 
@@ -682,53 +686,247 @@ def generate_consolidated_csv(batch):
     writer.writerow(headers)
     
     # Procesar cada documento hijo completado
-    for child_doc in batch.master_document.child_documents.filter(status='completed'):
+    for child_doc in batch.master_document.child_documents.filter(status='completed').order_by('patient_section_number'):
         if child_doc.extracted_data:
             try:
+                # CORRECCIÓN: Usar el extractor para generar CSV correctamente formateado
                 extractor = MedicalClaimExtractor()
                 csv_content = extractor.generate_excel_format_csv(child_doc.extracted_data)
                 
-                # Parsear el CSV y agregar número de sección
-                csv_lines = csv_content.strip().split('\n')
-                if len(csv_lines) > 1:  # Skip header
-                    for line in csv_lines[1:]:
-                        if line.strip():
-                            # Agregar número de sección al inicio
-                            row_data = [child_doc.patient_section_number] + line.split(',')
+                # CORRECCIÓN: Parsear el CSV usando csv.reader en lugar de split
+                csv_reader = csv.reader(StringIO(csv_content))
+                csv_lines = list(csv_reader)
+                
+                # Skip header (primera línea) y procesar datos
+                if len(csv_lines) > 1:
+                    for line in csv_lines[1:]:  # Skip header
+                        if line and any(cell.strip() for cell in line):  # Solo líneas con contenido
+                            # CORRECCIÓN: Agregar número de sección al inicio de la fila
+                            row_data = [child_doc.patient_section_number] + line
+                            
+                            # CORRECCIÓN: Asegurar que tenemos exactamente 21 columnas
+                            while len(row_data) < 21:
+                                row_data.append('')
+                            
+                            # Truncar si hay más columnas de las esperadas
+                            if len(row_data) > 21:
+                                row_data = row_data[:21]
+                            
                             writer.writerow(row_data)
+                            
             except Exception as e:
-                logger.error(f"Error procesando documento {child_doc.id}: {e}")
+                logger.error(f"Error procesando documento {child_doc.id} para CSV consolidado: {e}")
+                
+                # CORRECCIÓN: Agregar fila con datos básicos si falla la extracción
+                patient_info = child_doc.extracted_data.get('patient_info', {})
+                financial = child_doc.extracted_data.get('financial_summary', {})
+                
+                basic_row = [
+                    child_doc.patient_section_number,
+                    patient_info.get('nombre', ''),
+                    patient_info.get('documento', ''),
+                    '',  # FACTURA
+                    '',  # FECHA FACTURA
+                    financial.get('total_reclamado', 0),
+                    '',  # CÓDIGO ITEM
+                    'Error procesando datos',  # DETALLE DE GLOSA
+                    0,   # VALOR ITEM
+                    0,   # VALOR ACEPTADO
+                    0,   # VALOR NO ACEPTADO
+                    '',  # RESPUESTA IPS
+                    '',  # CLASIFICACIÓN GLOSA
+                    '',  # FECHA RECIBIDO GLOSA
+                    '',  # DIAS GLOSA
+                    '',  # FECHA RADICADO RESPUESTA
+                    '',  # DIAS RESPUESTA
+                    '',  # CÓDIGO RADICACIÓN
+                    '',  # FUNCIONARIO
+                    '',  # Entidad
+                    ''   # DESCRIPCIÓN PROCEDIMIENTO
+                ]
+                writer.writerow(basic_row)
                 continue
     
     response = HttpResponse(output.getvalue(), content_type='text/csv; charset=utf-8')
     response['Content-Disposition'] = f'attachment; filename="batch_{batch.id}_consolidated.csv"'
     return response
 
+
+
 def generate_batch_zip(batch, file_type):
-    """Genera un ZIP con todos los archivos del batch"""
+    """
+    Genera un ZIP con todos los archivos del batch
+    CORRECCIÓN: Mejorar el manejo de archivos y validación
+    """
+    import zipfile
+    import io
+    
     zip_buffer = io.BytesIO()
     
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        for child_doc in batch.master_document.child_documents.filter(status='completed'):
-            try:
-                if file_type == 'json' and child_doc.extracted_data:
-                    json_content = json.dumps(child_doc.extracted_data, indent=2, ensure_ascii=False)
-                    filename = f"paciente_{child_doc.patient_section_number}_{child_doc.original_filename}.json"
-                    zip_file.writestr(filename, json_content.encode('utf-8'))
-                
-                elif file_type == 'csv' and child_doc.extracted_data:
-                    extractor = MedicalClaimExtractor()
-                    csv_content = extractor.generate_excel_format_csv(child_doc.extracted_data)
-                    filename = f"paciente_{child_doc.patient_section_number}_{child_doc.original_filename}.csv"
-                    zip_file.writestr(filename, csv_content.encode('utf-8'))
+    try:
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            files_added = 0
+            
+            for child_doc in batch.master_document.child_documents.filter(status='completed').order_by('patient_section_number'):
+                try:
+                    if not child_doc.extracted_data:
+                        logger.warning(f"Documento {child_doc.id} no tiene datos extraídos")
+                        continue
                     
-            except Exception as e:
-                logger.error(f"Error agregando archivo {child_doc.id} al ZIP: {e}")
-                continue
+                    if file_type == 'json':
+                        # CORRECCIÓN: Generar JSON con codificación UTF-8 apropiada
+                        json_content = json.dumps(
+                            child_doc.extracted_data, 
+                            indent=2, 
+                            ensure_ascii=False,
+                            default=str  # Para manejar objetos no serializables
+                        )
+                        filename = f"paciente_{child_doc.patient_section_number:02d}_{child_doc.original_filename}.json"
+                        zip_file.writestr(filename, json_content.encode('utf-8'))
+                        files_added += 1
+                    
+                    elif file_type == 'csv':
+                        # CORRECCIÓN: Usar extractor para generar CSV correctamente
+                        extractor = MedicalClaimExtractor()
+                        csv_content = extractor.generate_excel_format_csv(child_doc.extracted_data)
+                        filename = f"paciente_{child_doc.patient_section_number:02d}_{child_doc.original_filename}.csv"
+                        zip_file.writestr(filename, csv_content.encode('utf-8'))
+                        files_added += 1
+                        
+                except Exception as e:
+                    logger.error(f"Error agregando archivo {child_doc.id} al ZIP: {e}")
+                    continue
+            
+            if files_added == 0:
+                # CORRECCIÓN: Agregar archivo de información si no hay archivos
+                info_content = f"""Información del Batch
+=====================================
+
+ID del Batch: {batch.id}
+Documento Original: {batch.master_document.original_filename}
+Fecha de Procesamiento: {batch.created_at.strftime('%d/%m/%Y %H:%M')}
+Total de Documentos: {batch.total_documents}
+Documentos Completados: {batch.completed_documents}
+Documentos con Error: {batch.failed_documents}
+
+Nota: No se encontraron archivos {file_type.upper()} válidos para incluir en este ZIP.
+"""
+                zip_file.writestr("README.txt", info_content.encode('utf-8'))
+                
+        logger.info(f"ZIP generado exitosamente: {files_added} archivos incluidos")
+        
+    except Exception as e:
+        logger.error(f"Error creando ZIP para batch {batch.id}: {e}")
+        # Crear ZIP de error
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            error_content = f"Error generando archivos: {str(e)}"
+            zip_file.writestr("ERROR.txt", error_content.encode('utf-8'))
     
     response = HttpResponse(zip_buffer.getvalue(), content_type='application/zip')
     response['Content-Disposition'] = f'attachment; filename="batch_{batch.id}_{file_type}_files.zip"'
     return response
+
+
+# ============================================================================
+# MEJORA ADICIONAL: Función auxiliar para validar CSV individual
+# ============================================================================
+
+def validate_csv_structure(csv_content: str) -> bool:
+    """
+    Valida que el CSV tenga la estructura correcta
+    """
+    try:
+        import csv
+        from io import StringIO
+        
+        csv_reader = csv.reader(StringIO(csv_content))
+        lines = list(csv_reader)
+        
+        if len(lines) < 2:  # Debe tener al menos header + 1 fila
+            return False
+        
+        header = lines[0]
+        expected_columns = 20  # Sin incluir NUMERO_SECCION
+        
+        if len(header) != expected_columns:
+            logger.warning(f"CSV header tiene {len(header)} columnas, esperadas {expected_columns}")
+            return False
+        
+        # Validar que las filas de datos tengan el número correcto de columnas
+        for i, row in enumerate(lines[1:], 1):
+            if len(row) != expected_columns:
+                logger.warning(f"Fila {i} tiene {len(row)} columnas, esperadas {expected_columns}")
+                return False
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error validando estructura CSV: {e}")
+        return False
+    
+
+
+# ============================================================================
+# FUNCIÓN DE DEBUGGING PARA INSPECCIONAR PROBLEMAS
+# ============================================================================
+
+def debug_csv_generation(batch_id):
+    """
+    Función de debugging para inspeccionar problemas en la generación de CSV
+    Uso: Llamar desde Django shell o comando de management
+    """
+    try:
+        batch = ProcessingBatch.objects.get(id=batch_id)
+        print(f"=== DEBUG BATCH {batch_id} ===")
+        print(f"Documento maestro: {batch.master_document.original_filename}")
+        print(f"Total documentos: {batch.total_documents}")
+        print(f"Completados: {batch.completed_documents}")
+        
+        for child_doc in batch.master_document.child_documents.filter(status='completed'):
+            print(f"\n--- Paciente {child_doc.patient_section_number} ---")
+            print(f"ID: {child_doc.id}")
+            print(f"Status: {child_doc.status}")
+            
+            if child_doc.extracted_data:
+                # Generar CSV individual
+                extractor = MedicalClaimExtractor()
+                csv_content = extractor.generate_excel_format_csv(child_doc.extracted_data)
+                
+                # Analizar estructura
+                lines = csv_content.strip().split('\n')
+                print(f"Líneas CSV: {len(lines)}")
+                
+                if lines:
+                    header = lines[0].split(',')
+                    print(f"Columnas header: {len(header)}")
+                    print(f"Header: {header[:5]}...")  # Primeras 5 columnas
+                    
+                    if len(lines) > 1:
+                        first_row = lines[1].split(',')
+                        print(f"Columnas primera fila: {len(first_row)}")
+                        print(f"Primera fila: {first_row[:5]}...")
+                        
+                        # Validar estructura
+                        is_valid = validate_csv_structure(csv_content)
+                        print(f"CSV válido: {is_valid}")
+                
+                # Información financiera
+                financial = child_doc.extracted_data.get('financial_summary', {})
+                procedures = child_doc.extracted_data.get('procedures', [])
+                print(f"Procedimientos: {len(procedures)}")
+                print(f"Total reclamado: {financial.get('total_reclamado', 0)}")
+            else:
+                print("Sin datos extraídos")
+        
+        print("\n=== FIN DEBUG ===")
+        
+    except Exception as e:
+        print(f"Error en debug: {e}")
+        import traceback
+        traceback.print_exc()
+
+
 
 def _generate_empty_csv(glosa):
     """Genera CSV vacío con headers correctos"""

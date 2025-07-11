@@ -240,3 +240,6 @@ openai_config.py
 
 # Scripts de instalación específicos del entorno
 install_local.sh
+
+# omitir pdf
+*.pdf
