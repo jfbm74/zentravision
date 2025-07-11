@@ -1,5 +1,5 @@
 # ==========================================
-# apps/core/forms.py
+# apps/core/forms.py - MODIFICADO PARA ESTRATEGIA POR DEFECTO "SOLO IA"
 # ==========================================
 
 from django import forms
@@ -24,6 +24,9 @@ class GlosaUploadForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
+        # CAMBIO: Establecer 'ai_only' como valor por defecto
+        self.fields['strategy'].initial = 'ai_only'
+        
         self.helper = FormHelper()
         self.helper.form_method = 'post'
         self.helper.form_enctype = 'multipart/form-data'
@@ -40,7 +43,7 @@ class GlosaUploadForm(forms.ModelForm):
             
             Div(
                 Field('strategy'),
-                HTML('<small class="form-text text-muted">La estrategia híbrida ofrece la mejor precisión.</small>'),
+                HTML('<small class="form-text text-muted">Solo IA ofrece la mejor precisión para glosas SOAT.</small>'),
                 css_class='mb-3'
             ),
             
