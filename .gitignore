@@ -243,3 +243,6 @@ install_local.sh
 
 # omitir pdf
 *.pdf
+
+# omitir deploy
+deploy_zentravision.sh
