@@ -141,7 +141,7 @@ CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 # ============================================================================
 
 # API Key (CRÍTICO - debe estar configurado)
-# OPENAI_API_KEY=
+OPENAI_API_KEY=""
 
 
 # Configuración de rate limiting
@@ -154,6 +154,7 @@ if not OPENAI_API_KEY:
     if 'runserver' in sys.argv or 'celery' in sys.argv:
         print("⚠️  ADVERTENCIA: OPENAI_API_KEY no está configurada!")
         print("   Configurar con: export OPENAI_API_KEY='tu-api-key'")
+    
 
 
 # Agregar este print temporalmente para debug
