@@ -141,7 +141,7 @@ CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 # ============================================================================
 
 # API Key (CRÍTICO - debe estar configurado)
-OPENAI_API_KEY="***REMOVED***"
+OPENAI_API_KEY=""
 
 # Configuración de rate limiting
 OPENAI_MAX_REQUESTS_PER_MINUTE = int(os.environ.get('OPENAI_MAX_REQUESTS_PER_MINUTE', '10'))
