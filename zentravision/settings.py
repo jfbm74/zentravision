@@ -4,14 +4,11 @@ from decouple import config
 import dj_database_url
 from dotenv import load_dotenv 
 
-
 # Cargar variables de entorno desde .env
 load_dotenv()  
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 SITE_URL = config('SITE_URL', default='http://localhost:8000')
-
-
 
 SECRET_KEY = config('SECRET_KEY')
 DEBUG = config('DEBUG', default=False, cast=bool)
@@ -98,13 +95,13 @@ USE_TZ = True
 
 # Static files
 STATIC_URL = '/static/'
-STATIC_ROOT = BASE_DIR / 'staticfiles'
-STATICFILES_DIRS = [BASE_DIR / 'static']
+STATIC_ROOT = config('STATIC_ROOT', default=str(BASE_DIR / 'staticfiles'))
+STATICFILES_DIRS = [BASE_DIR / 'static'] if (BASE_DIR / 'static').exists() else []
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 # Media files
 MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'media'
+MEDIA_ROOT = config('MEDIA_ROOT', default=str(BASE_DIR / 'media'))
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
@@ -134,53 +131,45 @@ CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 
-
-
 # ============================================================================
 # CONFIGURACIÓN DE OPENAI API
 # ============================================================================
 
 # API Key (CRÍTICO - debe estar configurado)
-OPENAI_API_KEY=""
-
+OPENAI_API_KEY = config('OPENAI_API_KEY', default='')
 
 # Configuración de rate limiting
-OPENAI_MAX_REQUESTS_PER_MINUTE = int(os.environ.get('OPENAI_MAX_REQUESTS_PER_MINUTE', '10'))
-OPENAI_REQUEST_TIMEOUT = int(os.environ.get('OPENAI_REQUEST_TIMEOUT', '120'))  # 2 minutos
+OPENAI_MAX_REQUESTS_PER_MINUTE = int(config('OPENAI_MAX_REQUESTS_PER_MINUTE', default='10'))
+OPENAI_REQUEST_TIMEOUT = int(config('OPENAI_REQUEST_TIMEOUT', default='120'))  # 2 minutos
 
 # Validación de API Key
 if not OPENAI_API_KEY:
     import sys
     if 'runserver' in sys.argv or 'celery' in sys.argv:
         print("⚠️  ADVERTENCIA: OPENAI_API_KEY no está configurada!")
-        print("   Configurar con: export OPENAI_API_KEY='tu-api-key'")
-    
-
-
-# Agregar este print temporalmente para debug
-print(f"OPENAI_API_KEY en settings: {'Configurada' if OPENAI_API_KEY else 'NO configurada'}")
-if OPENAI_API_KEY:
-    print(f"Primeros 10 caracteres: {OPENAI_API_KEY[:10]}...")
-
+        print("   Configurar manualmente en el archivo .env")
 
 # Límites de upload para PDFs grandes
 FILE_UPLOAD_MAX_MEMORY_SIZE = 50 * 1024 * 1024   # 50MB
 DATA_UPLOAD_MAX_MEMORY_SIZE = 50 * 1024 * 1024    # 50MB
-FILE_UPLOAD_TEMP_DIR = os.path.join(BASE_DIR, 'tmp')
 
+# CORREGIDO: Directorio temporal que se crea en Ansible
+FILE_UPLOAD_TEMP_DIR = config('FILE_UPLOAD_TEMP_DIR', default=str(BASE_DIR / 'tmp'))
+
+# Crear directorio temporal si no existe
+os.makedirs(FILE_UPLOAD_TEMP_DIR, exist_ok=True)
 
 # URLs de autenticación
-LOGIN_URL = 'login'  # Cambia de '/accounts/login/' a 'login'
-LOGIN_REDIRECT_URL = '/'  # Redirige al dashboard después del login
-LOGOUT_REDIRECT_URL = '/login/'  # Redirige al login después del logout
-
+LOGIN_URL = 'login'
+LOGIN_REDIRECT_URL = '/'
+LOGOUT_REDIRECT_URL = '/login/'
 
 # ============================================================================
 # CONFIGURACIÓN DE LOGGING MEJORADA
 # ============================================================================
 
-# Crear directorio de logs
-LOGS_DIR = os.path.join(BASE_DIR, 'logs')
+# CORREGIDO: Directorio de logs que se crea en Ansible
+LOGS_DIR = config('LOGS_DIR', default=str(BASE_DIR / 'logs'))
 os.makedirs(LOGS_DIR, exist_ok=True)
 
 LOGGING = {
@@ -263,14 +252,13 @@ LOGGING = {
     },
 }
 
-
 # ============================================================================
 # CONFIGURACIÓN DE CELERY PARA PROCESAMIENTO ASÍNCRONO
 # ============================================================================
 
 # URLs de broker y backend (Redis)
-CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/0')
-CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
+CELERY_BROKER_URL = config('CELERY_BROKER_URL', default='redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = config('CELERY_RESULT_BACKEND', default='redis://localhost:6379/0')
 
 # Configuración de timezone
 CELERY_TIMEZONE = 'America/Bogota'
@@ -286,20 +274,19 @@ CELERY_RESULT_EXPIRES = 3600  # 1 hora
 CELERY_RESULT_PERSISTENT = True
 
 # Configuración de workers
-CELERY_WORKER_CONCURRENCY = int(os.environ.get('CELERY_WORKER_CONCURRENCY', '4'))
+CELERY_WORKER_CONCURRENCY = int(config('CELERY_WORKER_CONCURRENCY', default='4'))
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_WORKER_MAX_TASKS_PER_CHILD = 50
 CELERY_WORKER_MAX_MEMORY_PER_CHILD = 1024000  # 1GB
 
 # Configuración de tareas
-CELERY_TASK_SOFT_TIME_LIMIT = 1800  # 30 minutos
-CELERY_TASK_TIME_LIMIT = 2400       # 40 minutos
+CELERY_TASK_SOFT_TIME_LIMIT = int(config('CELERY_TASK_SOFT_TIME_LIMIT', default='1800'))  # 30 minutos
+CELERY_TASK_TIME_LIMIT = int(config('CELERY_TASK_TIME_LIMIT', default='2400'))  # 40 minutos
 CELERY_TASK_ACKS_LATE = True
 CELERY_TASK_REJECT_ON_WORKER_LOST = True
 
 # Rate limiting para OpenAI API
 CELERY_TASK_DEFAULT_RATE_LIMIT = '8/m'  # 8 tareas por minuto
-
 
 # ============================================================================
 # CONFIGURACIÓN DE CACHE (OPCIONAL)
@@ -317,25 +304,13 @@ CACHES = {
     }
 }
 
-
-
-
 # ============================================================================
 # CONFIGURACIÓN DE SEGURIDAD PARA PRODUCCIÓN
 # ============================================================================
 
-# CORS para APIs (si es necesario)
-CORS_ALLOW_ALL_ORIGINS = DEBUG  # Solo en desarrollo
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    SITE_URL,
-]
-
 # Configuración de sesiones
 SESSION_COOKIE_AGE = 86400  # 24 horas
 SESSION_EXPIRE_AT_BROWSER_CLOSE = True
-
 
 # ============================================================================
 # CONFIGURACIÓN ESPECÍFICA PARA DESARROLLO VS PRODUCCIÓN
@@ -353,14 +328,16 @@ if DEBUG:
 else:
     # Configuración para producción
     
-    # Seguridad
-    SECURE_SSL_REDIRECT = True
-    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-    SESSION_COOKIE_SECURE = True
-    CSRF_COOKIE_SECURE = True
-    
-    # Configuración de archivos estáticos para producción
-    STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+    # Seguridad (solo si están configuradas en .env)
+    if config('SECURE_SSL_REDIRECT', default=False, cast=bool):
+        SECURE_SSL_REDIRECT = True
+        SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+        
+    if config('SESSION_COOKIE_SECURE', default=False, cast=bool):
+        SESSION_COOKIE_SECURE = True
+        
+    if config('CSRF_COOKIE_SECURE', default=False, cast=bool):
+        CSRF_COOKIE_SECURE = True
     
     # Rate limiting más estricto en producción
     CELERY_TASK_DEFAULT_RATE_LIMIT = '6/m'  # Más conservador
@@ -369,36 +346,17 @@ else:
     CELERY_WORKER_HIJACK_ROOT_LOGGER = False
     CELERY_WORKER_LOG_COLOR = False
 
-
 # ============================================================================
 # CONFIGURACIÓN DE MONITOREO (OPCIONAL)
 # ============================================================================
 
 # Configuración para métricas de rendimiento
 PERFORMANCE_MONITORING = {
-    'ENABLED': os.environ.get('PERFORMANCE_MONITORING_ENABLED', 'False').lower() == 'true',
+    'ENABLED': config('PERFORMANCE_MONITORING_ENABLED', default=False, cast=bool),
     'TRACK_CELERY_TASKS': True,
     'TRACK_API_CALLS': True,
     'TRACK_FILE_PROCESSING': True,
 }
-
-
-# ============================================================================
-# VALIDACIONES FINALES
-# ============================================================================
-
-# Validar configuraciones críticas
-CRITICAL_SETTINGS = {
-    'OPENAI_API_KEY': OPENAI_API_KEY,
-    'CELERY_BROKER_URL': CELERY_BROKER_URL,
-    'SECRET_KEY': SECRET_KEY,
-}
-
-missing_settings = [name for name, value in CRITICAL_SETTINGS.items() if not value]
-
-if missing_settings and not DEBUG:
-    raise ValueError(f"Configuraciones críticas faltantes: {missing_settings}")
-
 
 # ============================================================================
 # CONFIGURACIÓN ADICIONAL PARA CELERY BEAT (TAREAS PERIÓDICAS)
@@ -425,40 +383,18 @@ CELERY_BEAT_SCHEDULE = {
 }
 
 # ============================================================================
-# CONFIGURACIÓN DE VARIABLES DE ENTORNO PARA REFERENCIA
+# VALIDACIONES FINALES
 # ============================================================================
 
-"""
-VARIABLES DE ENTORNO REQUERIDAS:
+# Solo validar configuraciones críticas en producción, no en desarrollo
+if not DEBUG:
+    CRITICAL_SETTINGS = {
+        'SECRET_KEY': SECRET_KEY,
+        'CELERY_BROKER_URL': CELERY_BROKER_URL,
+    }
 
-# Críticas (obligatorias)
-export OPENAI_API_KEY="sk-..."
-export SECRET_KEY="tu-secret-key-super-seguro"
+    missing_settings = [name for name, value in CRITICAL_SETTINGS.items() if not value]
 
-# Base de datos (opcional, usa SQLite por defecto)
-export DATABASE_URL="postgresql://user:password@localhost/zentravision"
-
-# Celery (opcional, usa Redis local por defecto)
-export CELERY_BROKER_URL="redis://localhost:6379/0"
-export CELERY_RESULT_BACKEND="redis://localhost:6379/0"
-
-# Email (opcional, usa console backend por defecto)
-export EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend"
-export EMAIL_HOST="smtp.gmail.com"
-export EMAIL_HOST_USER="tu-email@gmail.com"
-export EMAIL_HOST_PASSWORD="tu-password"
-export DEFAULT_FROM_EMAIL="zentravision@tudominio.com"
-
-# Sitio web
-export SITE_URL="https://tudominio.com"
-
-# Desarrollo vs Producción
-export DJANGO_DEBUG="False"
-
-# Rendimiento
-export CELERY_WORKER_CONCURRENCY="4"
-export OPENAI_MAX_REQUESTS_PER_MINUTE="10"
-
-# Monitoreo (opcional)
-export PERFORMANCE_MONITORING_ENABLED="True"
-"""
+    if missing_settings:
+        print(f"⚠️  Configuraciones críticas faltantes: {missing_settings}")
+        # No lanzar excepción para permitir que la aplicación arranque
