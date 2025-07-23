@@ -617,6 +617,8 @@ class MedicalClaimExtractor:
         from io import StringIO
         
         output = StringIO()
+         # AGREGAR BOM UTF-8 para compatibilidad con Excel Windows
+        output.write('\ufeff')
         writer = csv.writer(output)
         
         # Headers en el orden exacto del Excel + descripción del procedimiento

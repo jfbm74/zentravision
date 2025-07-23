@@ -784,6 +784,8 @@ def download_batch_files(request, batch_id, file_type):
 def generate_consolidated_csv(batch):
     """Genera un CSV consolidado con todos los pacientes del batch"""
     output = StringIO()
+    # AGREGAR BOM UTF-8 para que Excel Windows detecte la codificación correctamente
+    output.write('\ufeff') 
     writer = csv.writer(output)
     
     # Headers consolidados (mismos que en CSV individual + número de sección)
@@ -936,6 +938,7 @@ Nota: No se encontraron archivos {file_type.upper()} válidos para incluir en es
 def _generate_empty_csv(glosa):
     """Genera CSV vacío con headers correctos"""
     output = StringIO()
+    output.write('\ufeff')
     writer = csv.writer(output)
     
     headers = [
