@@ -710,10 +710,13 @@ class MedicalClaimExtractor:
     # ============================================================================
 
     def _extract_with_openai(self, text: str) -> Dict[str, Any]:
-        """Extrae información usando OpenAI GPT con logs detallados"""
+        """Extrae información usando OpenAI GPT con logs detallados y procesamiento paginado"""
         try:
             import openai
             import json
+            # Importar procesador paginado
+            from .openai_paginated_processor import OpenAIPaginatedProcessorV2
+            logger.info("🚀 Usando OpenAIPaginatedProcessor V2 (versión mejorada)")
             
             if not self.openai_api_key:
                 logger.warning("No se ha configurado API key de OpenAI")
@@ -722,6 +725,49 @@ class MedicalClaimExtractor:
             logger.info("=" * 60)
             logger.info("PROCESO OPENAI - INICIO")
             logger.info(f"Timestamp: {datetime.now().isoformat()}")
+            start_time = time.time()
+            
+            # 🔍 PASO 1: Detectar si el documento requiere procesamiento paginado
+            paginated_processor = OpenAIPaginatedProcessorV2(
+                openai_api_key=self.openai_api_key,
+                chunk_size=15,
+                delay_between_calls=2.0
+            )
+            
+            should_paginate, analysis = paginated_processor.should_use_pagination(text)
+            
+            if should_paginate:
+                logger.info("🔄 DOCUMENTO GRANDE DETECTADO - Usando procesamiento paginado")
+                logger.info(f"   Razón: {analysis}")
+                
+                # Usar procesamiento paginado con fallback al método tradicional
+                result = paginated_processor.extract_with_pagination(
+                    text=text,
+                    fallback_method=lambda t: self._extract_with_openai_traditional(t)
+                )
+                
+                # Verificar si el resultado es válido
+                procedures = result.get('procedures', [])
+                if len(procedures) == 0 and analysis.get('estimated_procedures', 0) > 10:
+                    logger.warning("⚠️ Procesamiento paginado no extrajo procedimientos, usando fallback")
+                    return self._extract_with_openai_traditional(text)
+                
+                return result
+            else:
+                logger.info("📄 DOCUMENTO NORMAL - Usando método tradicional")
+                return self._extract_with_openai_traditional(text)
+                
+        except Exception as e:
+            logger.error(f"❌ ERROR EN MÉTODO PRINCIPAL: {str(e)}")
+            # Fallback al método tradicional
+            return self._extract_with_openai_traditional(text)
+    
+    def _extract_with_openai_traditional(self, text: str) -> Dict[str, Any]:
+        """Método tradicional de extracción con OpenAI (para documentos pequeños)"""
+        try:
+            import openai
+            import json
+            
             start_time = time.time()
             
             # Configurar cliente
@@ -815,7 +861,7 @@ class MedicalClaimExtractor:
                 # Validar y limpiar datos
                 ai_data = self._validate_openai_data(ai_data)
                 
-                logger.info("PROCESO OPENAI - COMPLETADO EXITOSAMENTE")
+                logger.info("PROCESO OPENAI TRADICIONAL - COMPLETADO EXITOSAMENTE")
                 logger.info("=" * 60)
                 
                 return ai_data
@@ -829,7 +875,7 @@ class MedicalClaimExtractor:
             logger.error("OpenAI no está instalado. Instale con: pip install openai")
             return self._get_empty_result()
         except Exception as e:
-            logger.error(f"Error en proceso OpenAI: {str(e)}", exc_info=True)
+            logger.error(f"Error en proceso OpenAI tradicional: {str(e)}", exc_info=True)
             return self._get_empty_result()
 
     def _build_enhanced_openai_prompt(self, text: str) -> str:
