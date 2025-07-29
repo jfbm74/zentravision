@@ -15,7 +15,7 @@ Zentravision es una aplicación web desarrollada en Django que permite la **extr
 - **📊 Dashboard Interactivo**: Interfaz moderna con estadísticas en tiempo real
 - **📦 Gestión de Batches**: Sistema completo para manejar documentos múltiples
 - **📈 Múltiples Formatos**: Exportación en JSON, CSV, y descargas masivas en ZIP
-- **🔍 Panel de Administración**: Gestión completa de documentos, logs y batches
+- **🔍 Panel de Administración Avanzado**: Gestión completa con visualización detallada de información del paciente, procedimientos y resumen financiero
 
 ## 🚀 Tecnologías Utilizadas
 
@@ -35,11 +35,11 @@ zentravision/
 ├── apps/
 │   ├── core/                           # Aplicación principal
 │   │   ├── models.py                   # Modelos: GlosaDocument, ProcessingBatch, ProcessingLog
-│   │   ├── views.py                    # Vistas para documentos únicos y batches
-│   │   ├── admin.py                    # Panel de administración mejorado
+│   │   ├── views.py                    # Vistas asíncronas para documentos únicos y batches
+│   │   ├── admin.py                    # Panel de administración con visualización avanzada
 │   │   ├── forms.py                    # Formularios de carga
 │   │   ├── urls.py                     # URLs: /api/glosas/, /api/batches/
-│   │   └── management/commands/        # Comandos: check_database, test_pdf_splitter
+│   │   └── management/commands/        # Comandos: check_database, test_pdf_splitter, cleanup_batches
 │   ├── extractor/                      # Motor de extracción
 │   │   ├── medical_claim_extractor_fixed.py  # Extractor híbrido principal
 │   │   ├── pdf_splitter.py            # Divisor automático de PDFs múltiples
@@ -241,27 +241,32 @@ python manage.py cleanup_batches --days 30 --cleanup-files
 ## 📊 API Endpoints
 
 ### Glosas Individuales
-- `GET /api/` - Dashboard principal
-- `GET /api/glosas/` - Listar glosas (con filtros)
-- `POST /api/upload/` - Subir nueva glosa
+- `GET /api/` - Dashboard principal con estadísticas en tiempo real
+- `GET /api/glosas/` - Listar glosas con filtros avanzados
+- `POST /api/upload/` - Subir nueva glosa (procesamiento asíncrono)
 - `GET /api/glosas/{id}/` - Detalle de glosa individual
 - `GET /api/glosas/{id}/status/` - Estado de procesamiento en tiempo real
 - `POST /api/glosas/{id}/reprocess/` - Reprocesar glosa
 
 ### Batches de Documentos Múltiples
-- `GET /api/batches/` - Listar batches de procesamiento
-- `GET /api/batches/{id}/` - Detalle de batch con progreso
+- `GET /api/batches/` - Listar batches con estado de progreso
+- `GET /api/batches/{id}/` - Detalle de batch con progreso en tiempo real
 - `POST /api/batches/{id}/reprocess/` - Reprocesar batch completo
 
 ### Descargas
 - `GET /download/{id}/json/` - Datos extraídos como JSON
-- `GET /download/{id}/csv/` - Procedimientos en formato Excel IPS
+- `GET /download/{id}/csv/` - Procedimientos en formato Excel IPS (UTF-8)
 - `GET /download/{id}/original/` - Archivo PDF original
 
 ### Descargas Masivas (Batches)
 - `GET /download/batch/{id}/consolidated_csv/` - CSV consolidado con todos los pacientes
 - `GET /download/batch/{id}/zip_json/` - ZIP con archivos JSON individuales
 - `GET /download/batch/{id}/zip_csv/` - ZIP con archivos CSV individuales
+
+### Panel de Administración
+- `/admin/core/glosadocument/` - Gestión avanzada de documentos con visualización detallada
+- `/admin/core/processingbatch/` - Monitoreo de batches de procesamiento
+- `/admin/core/processinglog/` - Logs detallados de procesamiento
 
 ## 🚀 Configuración para Producción
 
@@ -362,17 +367,30 @@ gunicorn zentravision.wsgi:application --bind 0.0.0.0:8000 --workers 4
 ```python
 # GlosaDocument - Documento principal con soporte para batches
 class GlosaDocument(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4)
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     original_file = models.FileField(upload_to='uploads/glosas/%Y/%m/')
+    original_filename = models.CharField(max_length=255)
+    file_size = models.PositiveIntegerField()
     status = models.CharField(max_length=20)  # pending, processing, completed, error
     strategy = models.CharField(max_length=20)  # hybrid, ai_only, ocr_only
     extracted_data = models.JSONField(null=True, blank=True)
+    error_message = models.TextField(null=True, blank=True)
     
     # Campos para manejo de documentos múltiples
     parent_document = models.ForeignKey('self', null=True, blank=True)
     is_master_document = models.BooleanField(default=False)
     patient_section_number = models.PositiveIntegerField(null=True)
     total_sections = models.PositiveIntegerField(null=True)
+    
+    # Propiedades utilitarias
+    @property
+    def liquidacion_numero(self):
+        # Extrae número de liquidación de extracted_data
+    
+    @property
+    def valor_reclamacion(self):
+        # Extrae valor de reclamación de extracted_data
 
 # ProcessingBatch - Gestión de batches de documentos múltiples
 class ProcessingBatch(models.Model):
@@ -381,6 +399,12 @@ class ProcessingBatch(models.Model):
     completed_documents = models.PositiveIntegerField(default=0)
     failed_documents = models.PositiveIntegerField(default=0)
     batch_status = models.CharField(max_length=20)  # splitting, processing, completed, error
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    
+    @property
+    def progress_percentage(self):
+        # Calcula porcentaje de progreso
     
 # ProcessingLog - Logs detallados de procesamiento
 class ProcessingLog(models.Model):
@@ -485,7 +509,8 @@ Este proyecto está bajo la **Licencia MIT** - ver el archivo [LICENSE](LICENSE)
 
 ## 🔄 Changelog
 
-### v1.2.0 (2025-07-10) - 🚀 VERSIÓN ACTUAL
+### v1.3.0 (2025-07-29) - 🚀 VERSIÓN ACTUAL
+- ✅ **Panel de Administración Django Mejorado**: Visualización detallada de información del paciente y procedimientos
 - ✅ **División automática de PDFs múltiples**
 - ✅ **Sistema de batches con procesamiento asíncrono**
 - ✅ **Gestión completa de documentos padre/hijo**
@@ -494,7 +519,16 @@ Este proyecto está bajo la **Licencia MIT** - ver el archivo [LICENSE](LICENSE)
 - ✅ **Extracción de observaciones de glosas**
 - ✅ **Dashboard mejorado con estadísticas de batches**
 - ✅ **Comandos de gestión y limpieza**
-- ✅ **Panel de administración avanzado**
+- ✅ **Soporte mejorado para caracteres especiales en CSV**
+- ✅ **Logs de procesamiento detallados con niveles INFO/WARNING/ERROR**
+
+### v1.2.0 (2025-07-10)
+- ✅ **División automática de PDFs múltiples**
+- ✅ **Sistema de batches con procesamiento asíncrono**
+- ✅ **Gestión completa de documentos padre/hijo**
+- ✅ **Descargas masivas (CSV consolidado, ZIP)**
+- ✅ **Dashboard mejorado con estadísticas de batches**
+- ✅ **Comandos de gestión y limpieza**
 
 ### v1.1.0 (2025-01-15)
 - Mejoras en extracción de procedimientos
