@@ -144,8 +144,8 @@ def process_single_glosa_document(self, glosa_id):
         from .medical_claim_extractor_fixed import MedicalClaimExtractor
         extractor = MedicalClaimExtractor(openai_api_key=openai_api_key)
         
-        # Determinar estrategia
-        strategy = getattr(glosa, 'strategy', 'ai_only')
+        # Determinar estrategia (usar hybrid por defecto para mejores resultados)
+        strategy = getattr(glosa, 'strategy', 'hybrid')
         
         ProcessingLog.objects.create(
             glosa=glosa,
